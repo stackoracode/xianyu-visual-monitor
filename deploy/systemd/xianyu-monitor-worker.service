@@ -1,0 +1,31 @@
+[Unit]
+Description=Xianyu Visual Monitor - capture worker (exactly one per desktop)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The existing Xvnc desktop belongs to root on the reference board. The worker needs read
+# access to that X authority file and the X socket. Two options are documented in
+# docs/DEPLOYMENT.md: (a) run this unit as root (default below), or (b) run as a dedicated
+# user that is granted access with `xhost +SI:localuser:xvm` from inside the desktop session.
+User=root
+Group=xvm
+EnvironmentFile=/etc/xianyu-monitor/monitor.env
+WorkingDirectory=/opt/xianyu-monitor
+ExecStart=/opt/xianyu-monitor/env/bin/xianyu-monitor worker
+Restart=on-failure
+RestartSec=10
+# Graceful shutdown: in-flight frames and jobs get up to 30 s to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+NoNewPrivileges=true
+# PrivateTmp must stay off: the X11 socket lives in /tmp/.X11-unix.
+PrivateTmp=false
+ProtectSystem=full
+ReadWritePaths=/var/lib/xianyu-monitor
+UMask=0027
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

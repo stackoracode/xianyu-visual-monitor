@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.overview') }}{% endblock %}
+{% block content %}
+{% set st = banner.states %}
+{% set hb = st.get('worker_heartbeat', {}) %}
+{% set health = st.get('health', {}) %}
+{% set rt = banner.rt %}
+<h1>{{ t('nav.overview') }}</h1>
+<div class="grid">
+  <section class="card">
+    <h2>{{ t('overview.health') }}</h2>
+    <dl>
+      <dt>{{ t('overview.worker') }}</dt><dd><span class="pill {{ 'ok' if banner.worker_fresh else 'bad' }}">{{ t('overview.fresh') if banner.worker_fresh else t('overview.stale') }}</span> {{ hb.get('at') or '-' }}</dd>
+      <dt>{{ t('overview.status') }}</dt><dd><span class="pill">{{ health.get('status') or hb.get('status') or '-' }}</span> {{ t('overview.since') }} {{ health.get('since') or '-' }}</dd>
+      <dt>{{ t('overview.last_frame') }}</dt><dd>{{ hb.get('last_frame_at') or '-' }}</dd>
+      <dt>{{ t('overview.last_ok_frame') }}</dt><dd>{{ health.get('last_ok_frame_at') or '-' }}</dd>
+      <dt>{{ t('overview.coverage') }}</dt><dd>{{ health.get('coverage') or '-' }}</dd>
+      <dt>{{ t('overview.profile') }}</dt><dd>{{ hb.get('profile') or '-' }}</dd>
+      <dt>{{ t('overview.ocr_ms') }}</dt><dd>p50 {{ hb.get('ocr_ms_p50') or '-' }} / p95 {{ hb.get('ocr_ms_p95') or '-' }}</dd>
+      <dt>{{ t('overview.latency') }}</dt><dd>p50 {{ hb.get('detect_latency_ms_p50') or '-' }} / p95 {{ hb.get('detect_latency_ms_p95') or '-' }} ms</dd>
+      <dt>{{ t('overview.counters') }}</dt><dd><code>{{ hb.get('counters', {}) }}</code></dd>
+      {% if health.get('issues') %}<dt>{{ t('overview.issues') }}</dt><dd><code>{{ health.get('issues') }}</code></dd>{% endif %}
+      {% if hb.get('low_disk') %}<dt>{{ t('overview.disk') }}</dt><dd class="bad">{{ t('overview.low_disk') }}</dd>{% endif %}
+    </dl>
+  </section>
+  <section class="card">
+    <h2>{{ t('overview.counts') }}</h2>
+    <dl>
+      <dt>{{ t('nav.customers') }}</dt><dd><code>{{ counts.customers }}</code></dd>
+      <dt>{{ t('overview.open_reviews') }}</dt><dd><a href="/review">{{ counts.open_reviews }}</a></dd>
+      <dt>{{ t('overview.jobs') }}</dt><dd><code>{{ counts.jobs }}</code></dd>
+      <dt>{{ t('overview.intents') }}</dt><dd><code>{{ counts.intents }}</code></dd>
+    </dl>
+  </section>
+</div>
+<section class="card">
+  <h2>{{ t('overview.controls') }}</h2>
+  <table class="controls">
+    <tr><th>{{ t('control.monitoring') }}</th>
+      <td>{{ t('control.paused') if st.get('monitor_paused', {}).get('paused') else t('control.running') }}</td>
+      <td>{% with action='pause_monitor', label=t('control.pause'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}
+          {% with action='resume_monitor', label=t('control.resume'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}</td></tr>
+    <tr><th>{{ t('control.mode') }}</th><td>{{ t('mode.' ~ rt.monitor_mode) }}</td>
+      <td>{% with action='mode_baseline', label=t('mode.baseline'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}
+          {% with action='mode_active', label=t('mode.active'), confirm=True, cls='' %}{% include "_control.html" %}{% endwith %}
+          <p class="hint">{{ t('control.mode_hint') }}</p></td></tr>
+    <tr><th>{{ t('control.dry_run') }}</th><td>{{ t('common.on') if rt.dry_run else t('common.off') }}</td>
+      <td>{% with action='enable_dry_run', label=t('control.enable'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}
+          {% with action='disable_dry_run', label=t('control.disable'), confirm=True, cls='danger' %}{% include "_control.html" %}{% endwith %}</td></tr>
+    <tr><th>{{ t('control.notifications') }}</th><td>{{ t('common.on') if rt.notifications_enabled else t('common.off') }}</td>
+      <td>{% with action='enable_notifications', label=t('control.enable'), confirm=True, cls='' %}{% include "_control.html" %}{% endwith %}
+          {% with action='disable_notifications', label=t('control.disable'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}</td></tr>
+    <tr><th>{{ t('control.reply_mode') }}</th><td>{{ t('reply_mode.' ~ rt.reply_mode) }}</td>
+      <td>{% with action='reply_mode_off', label=t('reply_mode.off'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}
+          {% with action='reply_mode_review', label=t('reply_mode.review'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}
+          {% with action='reply_mode_auto', label=t('reply_mode.auto'), confirm=True, cls='danger' %}{% include "_control.html" %}{% endwith %}</td></tr>
+    <tr><th>{{ t('control.reply_send') }}</th><td>{{ t('common.on') if rt.reply_send_enabled else t('common.off') }}</td>
+      <td>{% with action='enable_reply_send', label=t('control.enable'), confirm=True, cls='danger' %}{% include "_control.html" %}{% endwith %}
+          {% with action='disable_reply_send', label=t('control.disable'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}
+          <p class="hint">{{ t('control.reply_send_hint') }}</p></td></tr>
+    <tr><th>{{ t('control.replies_pause') }}</th><td>{{ t('control.paused') if st.get('replies_paused', {}).get('paused') else t('control.running') }}</td>
+      <td>{% with action='pause_replies', label=t('control.pause'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}
+          {% with action='resume_replies', label=t('control.resume'), confirm=False, cls='' %}{% include "_control.html" %}{% endwith %}</td></tr>
+  </table>
+</section>
+<section class="card">
+  <h2>{{ t('overview.recent_frames') }}</h2>
+  <table><tr><th>ID</th><th>{{ t('common.time') }}</th><th>{{ t('overview.status') }}</th><th>OCR</th><th>ms</th><th>{{ t('overview.rows') }}</th><th>{{ t('overview.overall_unread') }}</th></tr>
+  {% for f in frames %}<tr><td>{{ f.id }}</td><td>{{ f.captured_at|iso }}</td><td>{{ f.status }}</td><td>{{ '✓' if f.ocr_performed else '' }}</td><td>{{ '%.0f'|format(f.total_ms) }}</td><td>{{ f.rows_seen }}</td><td>{{ f.overall_unread if f.overall_unread is not none else '-' }}</td></tr>{% endfor %}
+  </table>
+  <p class="hint">{{ t('overview.overall_unread_hint') }}</p>
+</section>
+{% endblock %}

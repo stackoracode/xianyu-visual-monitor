@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.replies') }}{% endblock %}
+{% block content %}
+<h1>{{ t('nav.replies') }}</h1>
+<p class="hint">{{ t('replies.intro') }}</p>
+<p>{% for s in ['', 'review', 'approved', 'queued', 'sent_verified', 'sent_unverified', 'dry_run', 'failed', 'skipped', 'rejected'] %}<a href="/replies?status={{ s }}">{{ t('intent.' ~ s) if s else t('common.all') }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+<table>
+  <tr><th>ID</th><th>{{ t('common.time') }}</th><th>{{ t('common.name') }}</th><th>{{ t('common.status') }}</th><th>{{ t('replies.trigger') }}</th><th>{{ t('replies.reply') }}</th><th>{{ t('review.reasons') }}</th><th></th></tr>
+  {% for i, name in rows %}
+  <tr><td>{{ i.id }}</td><td>{{ i.created_at|iso }}</td><td><a href="/customers/{{ i.customer_id }}">{{ name }}</a></td>
+    <td><span class="pill {{ 'bad' if i.status in ['sent_unverified', 'failed'] else '' }}">{{ t('intent.' ~ i.status) }}</span></td>
+    <td class="source">{{ i.trigger_text }}</td>
+    <td>{% if i.status in ['review', 'approved', 'dry_run'] %}
+      <form method="post" action="/replies/{{ i.id }}/action" class="stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="approve">
+        <textarea name="reply_text" rows="2">{{ i.reply_text }}</textarea><button>{{ t('replies.approve') }}</button></form>
+      {% else %}<span class="source">{{ i.reply_text }}</span>{% endif %}</td>
+    <td>{% for r in i.reasons or [] %}<span class="pill">{{ t('reason.' ~ r) }}</span> {% endfor %}{% if i.verification %}<br><code>{{ i.verification }}</code>{% endif %}</td>
+    <td>{% if i.status in ['review', 'approved', 'planned', 'dry_run'] %}<form method="post" action="/replies/{{ i.id }}/action" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="reject"><button class="link">{{ t('replies.reject') }}</button></form>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="8">{{ t('common.none') }}</td></tr>{% endfor %}
+</table>
+{% endblock %}

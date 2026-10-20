@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="{{ 'zh-CN' if lang == 'zh' else 'en' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ t('app.title') }}{% endblock %} · {{ t('app.title') }}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">{{ t('app.title') }} <span class="muted">v{{ version }}</span></div>
+  {% if user %}
+  <nav>
+    <a href="/">{{ t('nav.overview') }}</a>
+    <a href="/calibration">{{ t('nav.calibration') }}</a>
+    <a href="/customers">{{ t('nav.customers') }}</a>
+    <a href="/review">{{ t('nav.review') }}</a>
+    <a href="/observations">{{ t('nav.observations') }}</a>
+    <a href="/notifications">{{ t('nav.notifications') }}</a>
+    <a href="/rules">{{ t('nav.rules') }}</a>
+    <a href="/replies">{{ t('nav.replies') }}</a>
+    <a href="/settings">{{ t('nav.settings') }}</a>
+    <a href="/diagnostics">{{ t('nav.diagnostics') }}</a>
+  </nav>
+  {% endif %}
+  <div class="right">
+    {% for code in languages %}
+      <a class="lang{% if code == lang %} active{% endif %}" href="/lang/{{ code }}?next={{ request.url.path }}">{{ t('lang.' ~ code) }}</a>
+    {% endfor %}
+    {% if user %}
+    <form method="post" action="/logout" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <button class="link">{{ t('nav.logout') }} ({{ user.username }})</button>
+    </form>
+    {% endif %}
+  </div>
+</header>
+{% if user and banner %}
+  {% set st = banner.states %}
+  <div class="banners">
+    {% if not banner.worker_fresh %}<div class="banner error">{{ t('banner.worker_stale') }}</div>{% endif %}
+    {% if st.get('monitor_paused', {}).get('paused') %}<div class="banner warn">{{ t('banner.monitor_paused') }}</div>{% endif %}
+    {% if st.get('replies_paused', {}).get('paused') %}<div class="banner warn">{{ t('banner.replies_paused', reason=st['replies_paused'].get('reason') or '-') }}</div>{% endif %}
+    {% if st.get('challenge', {}).get('active') %}<div class="banner error">{{ t('banner.challenge') }}</div>{% endif %}
+    {% if banner.rt.dry_run %}<div class="banner info">{{ t('banner.dry_run') }}</div>{% endif %}
+    {% if banner.rt.monitor_mode == 'baseline' %}<div class="banner info">{{ t('banner.baseline_mode') }}</div>{% endif %}
+  </div>
+{% endif %}
+<main>
+  {% for f in flashes %}<div class="flash {{ f.level }}">{{ f.message }}</div>{% endfor %}
+  {% block content %}{% endblock %}
+</main>
+<footer>{{ t('footer.limitations') }}</footer>
+</body>
+</html>

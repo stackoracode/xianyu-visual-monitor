@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.diagnostics') }}{% endblock %}
+{% block content %}
+<h1>{{ t('nav.diagnostics') }}</h1>
+<section class="card">
+  <h2>{{ t('diagnostics.export') }}</h2>
+  <p class="hint">{{ t('diagnostics.export_hint') }}</p>
+  <p><a class="button" href="/diagnostics/export.zip">{{ t('diagnostics.download') }}</a>
+     <a class="button" href="/diagnostics/export.zip?frames=1">{{ t('diagnostics.download_frames') }}</a></p>
+</section>
+<section class="card">
+  <h2>{{ t('diagnostics.state') }}</h2>
+  <pre class="code">{{ states|tojson_pretty }}</pre>
+</section>
+<section class="card">
+  <h2>{{ t('diagnostics.audit') }}</h2>
+  <table><tr><th>{{ t('common.time') }}</th><th>{{ t('common.by') }}</th><th>{{ t('diagnostics.action') }}</th><th></th></tr>
+  {% for a in audit %}<tr><td>{{ a.at|iso }}</td><td>{{ a.actor }}</td><td>{{ a.action }}</td><td><code>{{ a.detail }}</code></td></tr>{% endfor %}
+  </table>
+</section>
+{% endblock %}

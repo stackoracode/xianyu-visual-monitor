@@ -1,0 +1,327 @@
+"""Frame analysis: geometry/anchor validation, change detection, row OCR.
+
+The analyzer turns one screenshot into a ``FrameObservation``. It never decides whether a
+message is new; that is the tracker's job. OCR runs only for rows whose pixels changed,
+except every ``full_validation_every_n_frames`` frames, when all rows are re-read.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field, replace
+
+from PIL import Image
+
+from xianyu_monitor.detection.textnorm import normalize, parse_badge
+from xianyu_monitor.ocr.base import EMPTY, OcrResult
+from xianyu_monitor.ocr.pool import BLOCK_PREFIX, OcrPool
+from xianyu_monitor.runtime_settings import RuntimeSettings
+from xianyu_monitor.vision import imageops
+from xianyu_monitor.vision.pane import find_bubbles
+from xianyu_monitor.vision.profile import Profile
+
+
+@dataclass
+class RowObservation:
+    index: int
+    present: bool
+    name: str = ""
+    name_conf: float = 0.0
+    preview: str = ""
+    preview_conf: float = 0.0
+    time_text: str = ""
+    time_conf: float = 0.0
+    badge_present: bool = False
+    badge_count: int | None = None
+    badge_conf: float = 0.0
+    badge_digest: str = ""
+    avatar_hash: str | None = None
+    row_digest: str = ""
+    selected: bool = False
+
+    @property
+    def min_text_conf(self) -> float:
+        confs = [self.name_conf, self.preview_conf]
+        return min(confs)
+
+
+@dataclass
+class FrameObservation:
+    captured_at: dt.datetime
+    width: int
+    height: int
+    status: str  # ok | unchanged | layout_mismatch | blank | challenge
+    layout_issues: list[str] = field(default_factory=list)
+    changed: bool = True
+    ocr_performed: bool = False
+    ocr_ms: float = 0.0
+    analysis_ms: float = 0.0
+    overall_badge_present: bool = False
+    overall_unread: int | None = None
+    rows: list[RowObservation] = field(default_factory=list)
+    challenge_hits: list[str] = field(default_factory=list)
+
+    @property
+    def usable(self) -> bool:
+        return self.status in {"ok", "unchanged"}
+
+
+@dataclass
+class Bubble:
+    direction: str
+    text: str
+    confidence: float
+    box: tuple[int, int, int, int]
+
+
+@dataclass
+class PaneObservation:
+    title: str
+    title_conf: float
+    bubbles: list[Bubble]
+    composer_text: str
+    composer_conf: float
+
+    @property
+    def last_bubble(self) -> Bubble | None:
+        return self.bubbles[-1] if self.bubbles else None
+
+
+class FrameAnalyzer:
+    ROW_CACHE_SIZE = 512
+
+    def __init__(self, profile: Profile, ocr: OcrPool):
+        self.profile = profile
+        self.ocr = ocr
+        self._prev_signature: str | None = None
+        self._row_cache: OrderedDict[str, RowObservation] = OrderedDict()
+        self._last: FrameObservation | None = None
+        self.frame_counter = 0
+
+    def reset(self, profile: Profile | None = None) -> None:
+        if profile is not None:
+            self.profile = profile
+        self._prev_signature = None
+        self._row_cache.clear()
+        self._last = None
+
+    # ----- crops exactly as sent to OCR (also used by synthetic test fixtures) -----
+    def field_crop(self, frame: Image.Image, index: int, field_name: str) -> Image.Image:
+        return imageops.crop(frame, self.profile.field_box(index, field_name)).convert("RGB")
+
+    def avatar_crop(self, frame: Image.Image, index: int) -> Image.Image:
+        """Avatar pixels with the overlapping unread-badge area neutralized, so a badge
+        appearing or changing does not alter the avatar fingerprint."""
+        avatar_box = self.profile.field_box(index, "avatar")
+        badge_box = self.profile.field_box(index, "badge")
+        avatar = imageops.crop(frame, avatar_box).convert("RGB").copy()
+        left = max(avatar_box[0], badge_box[0]) - avatar_box[0]
+        top = max(avatar_box[1], badge_box[1]) - avatar_box[1]
+        right = min(avatar_box[2], badge_box[2]) - avatar_box[0]
+        bottom = min(avatar_box[3], badge_box[3]) - avatar_box[1]
+        if right > left and bottom > top:
+            avatar.paste((128, 128, 128), (left, top, right, bottom))
+        return avatar
+
+    def badge_ocr_image(self, crop: Image.Image) -> Image.Image:
+        c = self.profile.colors
+        return imageops.badge_glyph_image(crop, c.badge_red_min, c.badge_green_max, c.badge_blue_max).convert("RGB")
+
+    def _badge_present(self, crop: Image.Image) -> bool:
+        """Red area *and* light numeral strokes enclosed by red; a red patch inside an avatar
+        picture alone is not a badge."""
+        c = self.profile.colors
+        if imageops.red_ratio(crop, c.badge_red_min, c.badge_green_max, c.badge_blue_max) < c.badge_min_ratio:
+            return False
+        glyph = imageops.badge_glyph_image(crop, c.badge_red_min, c.badge_green_max, c.badge_blue_max)
+        ink = sum(1 for value in glyph.getdata() if value == 0)
+        return ink >= 3
+
+    def _row_selected(self, frame: Image.Image, index: int) -> bool:
+        left, top, _, bottom = self.profile.row_box(index)
+        strip = imageops.crop(frame, (left + 1, top + 2, left + 5, bottom - 2))
+        c = self.profile.colors
+        return imageops.color_close(imageops.mean_rgb(strip), c.selected_row, c.selected_tolerance)
+
+    def check_layout(self, frame: Image.Image) -> tuple[str, list[str]]:
+        p = self.profile
+        if frame.size != (p.frame_width, p.frame_height):
+            return "layout_mismatch", [f"frame_size:{frame.width}x{frame.height}!={p.frame_width}x{p.frame_height}"]
+        small = frame.convert("L").resize((64, 36))
+        if imageops.stddev(small) < 1.0:
+            return "blank", ["blank_frame"]
+        issues = []
+        for anchor in p.anchors:
+            if not anchor.dhash:
+                continue
+            region = imageops.crop(frame, anchor.region)
+            distance = imageops.hamming(imageops.dhash(region), anchor.dhash)
+            if distance > anchor.max_distance:
+                issues.append(f"anchor:{anchor.name}:{distance}")
+            elif anchor.mean is not None and abs(imageops.mean_gray(region) - anchor.mean) > anchor.max_mean_delta:
+                issues.append(f"anchor:{anchor.name}:mean")
+        return ("layout_mismatch" if issues else "ok"), issues
+
+    async def analyze(self, frame: Image.Image, captured_at: dt.datetime, rt: RuntimeSettings,
+                      force_full: bool = False) -> FrameObservation:
+        started = time.perf_counter()
+        self.frame_counter += 1
+        frame = frame.convert("RGB")
+        status, issues = self.check_layout(frame)
+        probe_due = self.frame_counter % max(1, int(rt.challenge_probe_every_n_frames)) == 0
+        challenge_hits: list[str] = []
+        if self.profile.challenge_probe is not None and (status != "ok" or probe_due):
+            challenge_hits = await self._probe_challenge(frame, rt)
+        if challenge_hits:
+            obs = FrameObservation(captured_at, frame.width, frame.height, "challenge", issues, True,
+                                   True, self.ocr.last_batch_ms, 0.0, challenge_hits=challenge_hits)
+            self._last = None
+            obs.analysis_ms = (time.perf_counter() - started) * 1000.0
+            return obs
+        if status != "ok":
+            self._last = None
+            self._prev_signature = None
+            return FrameObservation(captured_at, frame.width, frame.height, status, issues, True,
+                                    analysis_ms=(time.perf_counter() - started) * 1000.0)
+
+        # Exact per-row pixel digests are cheap and catch small changes (a 19px badge) that a
+        # downsampled whole-list difference would miss.
+        row_imgs = [imageops.crop(frame, self.profile.row_box(i)) for i in range(self.profile.row.count)]
+        signature = "|".join(imageops.digest(img) for img in row_imgs)
+        if self.profile.overall_unread_badge is not None:
+            signature += "|" + imageops.digest(imageops.crop(frame, self.profile.overall_unread_badge))
+        full_due = self.frame_counter % max(1, int(rt.full_validation_every_n_frames)) == 0
+        if (self._last is not None and not force_full and not full_due and signature == self._prev_signature):
+            obs = replace(self._last, captured_at=captured_at, status="unchanged", changed=False,
+                          ocr_performed=False, ocr_ms=0.0)
+            obs.analysis_ms = (time.perf_counter() - started) * 1000.0
+            return obs
+        self._prev_signature = signature
+        if force_full or full_due:
+            self._row_cache.clear()
+
+        rows: list[RowObservation | None] = []
+        requests: list[tuple[str, Image.Image]] = []
+        pending: dict[int, RowObservation] = {}
+        c = self.profile.colors
+        for index, row_img in enumerate(row_imgs):
+            selected = self._row_selected(frame, index)
+            if imageops.stddev(row_img) <= c.blank_stddev_max:
+                rows.append(RowObservation(index=index, present=False, selected=selected))
+                continue
+            row_digest = imageops.digest(row_img)
+            cached = self._row_cache.get(row_digest)
+            if cached is not None:
+                self._row_cache.move_to_end(row_digest)
+                rows.append(replace(cached, index=index, selected=selected))
+                continue
+            avatar = self.avatar_crop(frame, index)
+            avatar_hash = imageops.dhash(avatar) if imageops.stddev(avatar) > 3.0 else None
+            badge_crop = self.field_crop(frame, index, "badge")
+            badge_present = self._badge_present(badge_crop)
+            obs = RowObservation(index=index, present=True, badge_present=badge_present,
+                                 badge_digest=imageops.digest(badge_crop)[:16], avatar_hash=avatar_hash,
+                                 row_digest=row_digest, selected=selected)
+            for field_name in ("name", "preview", "time"):
+                requests.append((f"r{index}.{field_name}", self.field_crop(frame, index, field_name)))
+            if badge_present:
+                requests.append((f"r{index}.badge", self.badge_ocr_image(badge_crop)))
+            pending[index] = obs
+            rows.append(None)
+
+        overall_present = False
+        if self.profile.overall_unread_badge is not None:
+            overall_crop = imageops.crop(frame, self.profile.overall_unread_badge)
+            overall_present = self._badge_present(overall_crop)
+            if overall_present:
+                requests.append(("overall", self.badge_ocr_image(overall_crop)))
+
+        results: dict[str, OcrResult] = await self.ocr.recognize(requests) if requests else {}
+        for index, obs in pending.items():
+            name = results.get(f"r{index}.name", EMPTY)
+            preview = results.get(f"r{index}.preview", EMPTY)
+            when = results.get(f"r{index}.time", EMPTY)
+            obs.name, obs.name_conf = name.text.strip(), name.confidence
+            obs.preview, obs.preview_conf = preview.text.strip(), preview.confidence
+            obs.time_text, obs.time_conf = when.text.strip(), when.confidence
+            if obs.badge_present:
+                badge = results.get(f"r{index}.badge", EMPTY)
+                obs.badge_count = parse_badge(badge.text)
+                obs.badge_conf = badge.confidence if obs.badge_count is not None else 0.0
+            if not obs.name and not obs.preview:
+                # Pixels present but no readable text (e.g. loading skeleton): unknown, not empty.
+                obs.name_conf = obs.preview_conf = 0.0
+            rows[index] = obs
+            self._row_cache[obs.row_digest] = replace(obs, selected=False)
+            while len(self._row_cache) > self.ROW_CACHE_SIZE:
+                self._row_cache.popitem(last=False)
+
+        overall_value = parse_badge(results["overall"].text) if "overall" in results else None
+        obs = FrameObservation(
+            captured_at=captured_at, width=frame.width, height=frame.height, status="ok",
+            changed=True, ocr_performed=bool(requests), ocr_ms=self.ocr.last_batch_ms if requests else 0.0,
+            overall_badge_present=overall_present, overall_unread=overall_value,
+            rows=[row for row in rows if row is not None],
+        )
+        obs.analysis_ms = (time.perf_counter() - started) * 1000.0
+        self._last = obs
+        return obs
+
+    async def _probe_challenge(self, frame: Image.Image, rt: RuntimeSettings) -> list[str]:
+        assert self.profile.challenge_probe is not None
+        region = imageops.crop(frame, self.profile.challenge_probe).convert("RGB")
+        result = (await self.ocr.recognize([(BLOCK_PREFIX + "probe", region)])).get(BLOCK_PREFIX + "probe", EMPTY)
+        text = normalize(result.text).replace(" ", "")
+        hits = []
+        for keyword in rt.challenge_keywords:
+            needle = normalize(keyword).replace(" ", "")
+            if needle and needle in text:
+                hits.append(keyword)
+        return hits
+
+    def probe_crop(self, frame: Image.Image) -> Image.Image | None:
+        if self.profile.challenge_probe is None:
+            return None
+        return imageops.crop(frame.convert("RGB"), self.profile.challenge_probe).convert("RGB")
+
+    # ----- conversation pane (reply targeting / verification) -----
+    def bubble_text_crop(self, frame: Image.Image, box: tuple[int, int, int, int]) -> Image.Image:
+        left, top, right, bottom = box
+        inset = (left + 2, top + 2, max(left + 3, right - 2), max(top + 3, bottom - 2))
+        return imageops.crop(frame.convert("RGB"), inset).convert("RGB")
+
+    def title_crop(self, frame: Image.Image) -> Image.Image | None:
+        if self.profile.conversation_title is None:
+            return None
+        return imageops.crop(frame.convert("RGB"), self.profile.conversation_title).convert("RGB")
+
+    def composer_crop(self, frame: Image.Image) -> Image.Image | None:
+        if self.profile.composer is None:
+            return None
+        return imageops.crop(frame.convert("RGB"), self.profile.composer).convert("RGB")
+
+    async def analyze_pane(self, frame: Image.Image) -> PaneObservation:
+        p = self.profile
+        frame = frame.convert("RGB")
+        requests: list[tuple[str, Image.Image]] = []
+        title_crop = self.title_crop(frame)
+        if title_crop is not None:
+            requests.append(("title", title_crop))
+        composer_crop = self.composer_crop(frame)
+        if composer_crop is not None:
+            requests.append(("composer", composer_crop))
+        boxes = []
+        if p.message_pane is not None:
+            boxes = find_bubbles(frame, p.message_pane, p.colors, p.min_bubble_width, p.min_bubble_height)
+            for i, bubble in enumerate(boxes):
+                requests.append((f"b{i}", self.bubble_text_crop(frame, bubble.box)))
+        results = await self.ocr.recognize(requests)
+        title = results.get("title", EMPTY)
+        composer = results.get("composer", EMPTY)
+        bubbles = []
+        for i, bubble in enumerate(boxes):
+            res = results.get(f"b{i}", EMPTY)
+            bubbles.append(Bubble(bubble.direction, res.text.strip(), res.confidence, bubble.box))
+        return PaneObservation(title.text.strip(), title.confidence, bubbles, composer.text.strip(), composer.confidence)

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.8.4
+      - run: ruff check src tests scripts
+      - run: python -m compileall -q src tests scripts
+      - name: Privacy scan of tracked files
+        run: python scripts/privacy_scan.py
+
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+        db: [sqlite, mysql]
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-pw
+          MYSQL_DATABASE: xvm_test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-root-pw"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements/dev.txt && pip install --no-deps -e .
+      - name: Run tests (${{ matrix.db }})
+        env:
+          XVM_TEST_MYSQL_URL: ${{ matrix.db == 'mysql' && 'mysql+aiomysql://root:ci-root-pw@127.0.0.1:3306/xvm_test?charset=utf8mb4' || '' }}
+        run: pytest -q -rs --junitxml=junit-${{ matrix.python }}-${{ matrix.db }}.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-${{ matrix.python }}-${{ matrix.db }}
+          path: junit-*.xml
+
+  arm64-focal:
+    name: arm64 Ubuntu 20.04 (glibc 2.31) + Conda Python 3.10 + real OCR
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install and test inside arm64 ubuntu:20.04
+        run: docker run --rm -v "$PWD:/src" -w /src arm64v8/ubuntu:20.04 bash scripts/ci_focal_arm64.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm64-focal-artifacts
+          path: artifacts/

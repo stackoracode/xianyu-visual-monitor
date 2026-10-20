@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.calibration') }}{% endblock %}
+{% block content %}
+<h1>{{ t('nav.calibration') }}</h1>
+<p class="hint">{{ t('calibration.intro') }}</p>
+{% if has_frame %}
+<section class="card">
+  <h2>{{ t('calibration.latest_frame') }}</h2>
+  <p><a href="/calibration/overlay.png">{{ t('calibration.overlay') }}</a> · <a href="/calibration/overlay.png?masked=1">{{ t('calibration.overlay_masked') }}</a></p>
+  <img class="frame" src="/calibration/overlay.png" alt="{{ t('calibration.overlay') }}">
+  <form method="post" action="/calibration/anchors">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button>{{ t('calibration.capture_anchors') }}</button>
+    <span class="hint">{{ t('calibration.capture_anchors_hint') }}</span>
+  </form>
+</section>
+{% else %}
+<div class="flash info">{{ t('calibration.no_frame') }}</div>
+{% endif %}
+<section class="card">
+  <h2>{{ t('calibration.profile') }} {% if active %}#{{ active.id }} ({{ active.name }}){% else %}({{ t('calibration.not_set') }}){% endif %}</h2>
+  <form method="post" action="/calibration">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <textarea name="profile" rows="28" class="code">{{ profile_text }}</textarea>
+    <button>{{ t('calibration.save') }}</button>
+  </form>
+</section>
+<section class="card">
+  <h2>{{ t('calibration.history') }}</h2>
+  <table><tr><th>ID</th><th>{{ t('common.name') }}</th><th>{{ t('common.created') }}</th><th>{{ t('common.by') }}</th><th></th></tr>
+  {% for p in history %}<tr><td>{{ p.id }}</td><td>{{ p.name }}</td><td>{{ p.created_at|iso }}</td><td>{{ p.created_by }}</td>
+    <td>{% if p.active %}<span class="pill ok">{{ t('calibration.active') }}</span>{% else %}
+      <form method="post" action="/calibration/{{ p.id }}/activate" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>{{ t('calibration.activate') }}</button></form>{% endif %}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endblock %}

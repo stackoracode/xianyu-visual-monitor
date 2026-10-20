@@ -1,0 +1,102 @@
+"""Turn incoming message events into durable reply intents (and reply jobs when allowed)."""
+
+from __future__ import annotations
+
+import datetime as dt
+import logging
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from xianyu_monitor import state_keys
+from xianyu_monitor.db import get_state
+from xianyu_monitor.models import Customer, KeywordRule, MessageEvent, ReplyIntent
+from xianyu_monitor.queueing.jobs import enqueue
+from xianyu_monitor.replies.rules import Rule, evaluate
+from xianyu_monitor.runtime_settings import RuntimeSettings
+from xianyu_monitor.timeutil import utcnow
+
+log = logging.getLogger(__name__)
+
+SENT_STATUSES = ("queued", "sending", "sent_verified", "sent_unverified")
+
+
+def rule_from_row(row: KeywordRule) -> Rule:
+    return Rule(id=row.id, name=row.name, priority=row.priority, match_type=row.match_type,
+                match_mode=row.match_mode, patterns=list(row.patterns or []),
+                exclude_patterns=list(row.exclude_patterns or []), template=row.template,
+                cooldown_seconds=row.cooldown_seconds, scope=row.scope, allow_sensitive=row.allow_sensitive,
+                requires_review=row.requires_review, enabled=row.enabled)
+
+
+async def load_rules(session: AsyncSession) -> list[Rule]:
+    rows = (await session.execute(select(KeywordRule).where(KeywordRule.enabled.is_(True)))).scalars().all()
+    return [rule_from_row(r) for r in rows]
+
+
+async def _recent_count(session: AsyncSession, customer_id: str, since: dt.datetime,
+                        rule_id: int | None = None) -> int:
+    query = select(func.count(ReplyIntent.id)).where(
+        ReplyIntent.customer_id == customer_id, ReplyIntent.status.in_(SENT_STATUSES),
+        ReplyIntent.created_at >= since)
+    if rule_id is not None:
+        query = query.where(ReplyIntent.rule_id == rule_id)
+    return int((await session.execute(query)).scalar_one())
+
+
+async def enqueue_reply_job(session: AsyncSession, intent: ReplyIntent) -> None:
+    job, _ = await enqueue(session, "reply", f"reply:{intent.id}", {"intent_id": intent.id},
+                           priority=10, max_attempts=3)
+    intent.job_id = job.id
+    intent.status = "queued"
+    intent.updated_at = utcnow()
+
+
+async def plan_reply(session: AsyncSession, event: MessageEvent, customer: Customer, rt: RuntimeSettings,
+                     rules: list[Rule] | None = None) -> ReplyIntent | None:
+    if rt.reply_mode == "off" or event.kind != "incoming" or event.direction != "incoming":
+        return None
+    if customer.status not in {"new", "known", "baseline"}:
+        return None
+    existing = (await session.execute(
+        select(ReplyIntent).where(ReplyIntent.message_event_id == event.id))).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    rules = rules if rules is not None else await load_rules(session)
+    decision = evaluate(event.preview_raw, rules, customer_status=customer.status,
+                        customer_name=customer.display_name, sensitive_terms=rt.sensitive_terms,
+                        attachment_markers=rt.attachment_markers, negations=rt.negation_terms,
+                        truncated=event.preview_truncated)
+    if decision.action == "none":
+        return None
+    reasons = list(decision.reasons)
+    status = "review" if decision.action == "review" else "planned"
+    now = utcnow()
+    if event.confidence < float(rt.reply_min_confidence):
+        reasons.append("low_detection_confidence")
+        status = "review"
+    if decision.rule is not None and status == "planned":
+        since = now - dt.timedelta(seconds=max(0, decision.rule.cooldown_seconds))
+        if await _recent_count(session, customer.id, since, decision.rule.id):
+            reasons.append("cooldown_active")
+            status = "skipped"
+        elif int(rt.reply_max_per_customer_per_day) and await _recent_count(
+                session, customer.id, now - dt.timedelta(days=1)) >= int(rt.reply_max_per_customer_per_day):
+            reasons.append("daily_limit_reached")
+            status = "skipped"
+    paused = (await get_state(session, state_keys.REPLY_PAUSE)).get("paused", False)
+    if status == "planned" and paused:
+        reasons.append("replies_paused")
+        status = "review"
+    if status == "planned" and not rt.auto_reply_allowed:
+        reasons.append("review_mode" if rt.reply_mode == "review" else "sending_not_enabled")
+        status = "review"
+    intent = ReplyIntent(message_event_id=event.id, customer_id=customer.id,
+                         rule_id=decision.rule.id if decision.rule else None, status=status, reasons=reasons,
+                         trigger_text=event.preview_raw, reply_text=decision.reply_text, created_at=now,
+                         updated_at=now)
+    session.add(intent)
+    await session.flush()
+    if status == "planned":
+        await enqueue_reply_job(session, intent)
+    return intent

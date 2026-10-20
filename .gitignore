@@ -1,0 +1,48 @@
+# Secrets and private runtime configuration
+.env
+.env.*
+!.env.example
+*.env
+!deploy/monitor.env.example
+*.pem
+*.key
+secrets/
+private*/
+
+# Private evidence must never be committed (screenshots, rendered HTML, captures)
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.bmp
+*.html.bak
+*.har
+*.rendered.html
+*.saved.html
+reference/
+screenshots/
+captures/
+frames/
+
+# Runtime data
+data/
+var/
+logs/
+*.log
+*.db
+*.sqlite3
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/

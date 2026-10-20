@@ -1,0 +1,47 @@
+{
+  "name": "example-1280x720",
+  "frame_width": 1280,
+  "frame_height": 720,
+  "conversation_list": [44, 290, 374, 669],
+  "overall_unread_badge": [103, 252, 121, 270],
+  "row": {
+    "left": 45,
+    "right": 373,
+    "first_top": 290,
+    "height": 68,
+    "count": 5,
+    "fields": {
+      "avatar": [12, 12, 58, 59],
+      "badge": [37, 10, 56, 29],
+      "name": [65, 9, 227, 30],
+      "preview": [65, 29, 245, 47],
+      "time": [65, 47, 155, 63]
+    }
+  },
+  "conversation_title": [388, 248, 760, 275],
+  "message_pane": [376, 374, 1018, 520],
+  "composer": [385, 560, 960, 600],
+  "composer_click": [600, 580],
+  "composer_placeholder": "请输入消息，按Enter键发送或点击发送按钮发送",
+  "challenge_probe": [44, 195, 1085, 669],
+  "anchors": [
+    {"name": "list_header", "region": [50, 245, 100, 277], "dhash": "", "max_distance": 12},
+    {"name": "site_logo", "region": [135, 135, 225, 182], "dhash": "", "max_distance": 12}
+  ],
+  "colors": {
+    "badge_red_min": 200,
+    "badge_green_max": 120,
+    "badge_blue_max": 120,
+    "badge_min_ratio": 0.18,
+    "outgoing_bubble": [248, 228, 8],
+    "outgoing_tolerance": 30,
+    "incoming_bubble": [240, 240, 240],
+    "incoming_tolerance": 4,
+    "pane_background": [248, 252, 248],
+    "selected_row": [232, 236, 232],
+    "selected_tolerance": 6,
+    "blank_stddev_max": 2.0
+  },
+  "min_bubble_height": 18,
+  "min_bubble_width": 24
+}

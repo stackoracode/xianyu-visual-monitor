@@ -1,0 +1,105 @@
+"""Reply targeting and send verification against a fake desktop (no real input is sent)."""
+
+from synth import FakeDesktop, Harness, SBubble, SRow
+
+from xianyu_monitor.detection.textnorm import normalize_name
+from xianyu_monitor.replies.executor import ReplyExecutor, ReplyTarget
+from xianyu_monitor.runtime_settings import RuntimeSettings
+
+RT = RuntimeSettings({"reply_step_delay_seconds": 0.1, "reply_verify_timeout_seconds": 0.3,
+                      "full_validation_every_n_frames": 1000, "challenge_probe_every_n_frames": 1000})
+
+
+async def no_sleep(_seconds):
+    return None
+
+
+def setup(**desktop_flags):
+    h = Harness()
+    rows = [SRow("买家甲", "还在吗", "刚刚", badge=1, avatar=1), SRow("买家乙", "谢谢", "5分钟前", avatar=2),
+            SRow("买家丙", "好的", "10-11", avatar=3, selected=True)]
+    history = {"买家甲": [SBubble("incoming", "你好"), SBubble("incoming", "还在吗")],
+               "买家乙": [SBubble("incoming", "谢谢")], "买家丙": [SBubble("outgoing", "好的")]}
+    desk = FakeDesktop(h, rows, history)
+    for key, value in desktop_flags.items():
+        setattr(desk, key, value)
+    phases: list[str] = []
+
+    async def set_phase(phase):
+        phases.append(phase)
+        return True
+
+    executor = ReplyExecutor(h.analyzer, desk.capture_async, desk, sleep=no_sleep)
+    target = ReplyTarget("c1", {normalize_name("买家甲")}, set(), "还在吗", "在的，可以直接拍")
+    return desk, executor, target, set_phase, phases
+
+
+async def test_verified_send():
+    desk, executor, target, set_phase, phases = setup()
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "sent_verified", outcome
+    assert phases[:4] == ["precheck", "targeting", "verifying_target", "typing"]
+    assert ("type", "在的，可以直接拍") in desk.actions and ("press", "Return") in desk.actions
+    assert desk.history["买家甲"][-1].direction == "outgoing"
+
+
+async def test_dry_run_sends_no_input():
+    desk, executor, target, set_phase, phases = setup()
+    outcome = await executor.execute(target, RT, set_phase, dry_run=True)
+    assert outcome.status == "dry_run" and desk.actions == [] and phases == ["precheck"]
+
+
+async def test_wrong_conversation_opened_aborts_before_typing_and_pauses():
+    desk, executor, target, set_phase, phases = setup(misroute=1)
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "aborted" and outcome.reason == "conversation_title_mismatch"
+    assert outcome.pause_replies and outcome.clicked and not outcome.typed
+    assert not any(a[0] == "type" for a in desk.actions) and "typing" not in phases
+
+
+async def test_owner_typing_in_composer_aborts():
+    desk, executor, target, set_phase, _ = setup()
+    desk.composer = "店主正在输入"
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "aborted" and outcome.reason == "composer_not_empty_owner_may_be_typing"
+    assert not any(a[0] == "type" for a in desk.actions)
+
+
+async def test_unconfirmed_send_is_unverified_and_pauses():
+    desk, executor, target, set_phase, phases = setup(drop_send=True)
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "sent_unverified" and outcome.pause_replies and outcome.typed
+    assert "verifying_send" in phases
+
+
+async def test_stale_trigger_aborts_without_clicking():
+    desk, executor, target, set_phase, _ = setup()
+    desk.rows[0].preview = "能便宜点吗"
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "aborted" and outcome.reason == "trigger_stale_or_unreadable"
+    assert desk.actions == []
+
+
+async def test_duplicate_visible_name_aborts():
+    desk, executor, target, set_phase, _ = setup()
+    desk.rows[1].name = "买家甲"
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "aborted" and outcome.reason == "target_row_not_unique"
+    assert desk.actions == []
+
+
+async def test_latest_bubble_outgoing_means_already_answered():
+    desk, executor, target, set_phase, _ = setup()
+    desk.history["买家甲"].append(SBubble("outgoing", "店主已回复"))
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "aborted" and outcome.reason == "latest_bubble_not_incoming"
+
+
+async def test_lease_loss_stops_before_input():
+    desk, executor, target, _, _ = setup()
+
+    async def lost(phase):
+        return phase == "precheck"
+
+    outcome = await executor.execute(target, RT, lost)
+    assert outcome.reason == "lease_lost" and desk.actions == []

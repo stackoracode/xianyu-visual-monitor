@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.observations') }}{% endblock %}
+{% block content %}
+<h1>{{ t('nav.observations') }}</h1>
+<p class="hint">{{ t('obs.intro') }}</p>
+<p>{% for k in ['', 'incoming', 'possible', 'outgoing', 'read_elsewhere'] %}<a href="/observations?kind={{ k }}">{{ t('kind.' ~ k) if k else t('common.all') }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+<table>
+  <tr><th>{{ t('common.time') }}</th><th>{{ t('common.name') }}</th><th>{{ t('obs.kind') }}</th><th>{{ t('obs.direction') }}</th><th>{{ t('common.preview') }}</th><th>{{ t('obs.badge') }}</th><th>{{ t('obs.signals') }}</th><th>{{ t('obs.confidence') }}</th></tr>
+  {% for e, name in events %}
+  <tr><td>{{ e.captured_at|iso }}</td><td><a href="/customers/{{ e.customer_id }}">{{ name }}</a></td><td>{{ t('kind.' ~ e.kind) }}</td><td>{{ e.direction }}</td>
+    <td class="source">{{ e.preview_raw }}{% if e.preview_truncated %} <span class="pill">{{ t('obs.truncated') }}</span>{% endif %}</td>
+    <td>{{ e.badge_before if e.badge_before is not none else '?' }} → {{ e.badge_after if e.badge_after is not none else '?' }}</td>
+    <td><code>{{ e.signals }}</code></td><td>{{ '%.2f'|format(e.confidence) }}</td></tr>
+  {% else %}<tr><td colspan="8">{{ t('common.none') }}</td></tr>{% endfor %}
+</table>
+<h2>{{ t('overview.recent_frames') }}</h2>
+<table><tr><th>ID</th><th>{{ t('common.time') }}</th><th>{{ t('overview.status') }}</th><th>{{ t('obs.changed') }}</th><th>OCR</th><th>capture ms</th><th>OCR ms</th><th>total ms</th><th>{{ t('overview.rows') }}</th><th>{{ t('overview.issues') }}</th></tr>
+{% for f in frames %}<tr><td>{{ f.id }}</td><td>{{ f.captured_at|iso }}</td><td>{{ f.status }}</td><td>{{ '✓' if f.changed else '' }}</td><td>{{ '✓' if f.ocr_performed else '' }}</td><td>{{ '%.0f'|format(f.capture_ms) }}</td><td>{{ '%.0f'|format(f.ocr_ms) }}</td><td>{{ '%.0f'|format(f.total_ms) }}</td><td>{{ f.rows_seen }}</td><td><code>{{ (f.summary or {}).get('issues') or '' }}</code></td></tr>{% endfor %}
+</table>
+{% endblock %}

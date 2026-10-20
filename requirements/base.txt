@@ -1,0 +1,17 @@
+# Runtime (web + worker). Exact top-level pins, verified to have cp310-cp312
+# manylinux wheels for aarch64 with glibc <= 2.31 (Ubuntu 20.04) or to be pure Python.
+fastapi==0.115.6
+starlette==0.41.3
+uvicorn==0.32.1
+jinja2==3.1.6
+itsdangerous==2.2.0
+python-multipart==0.0.20
+pydantic==2.10.6
+pydantic-core==2.27.2
+sqlalchemy[asyncio]==2.0.36
+greenlet==3.1.1
+alembic==1.14.0
+aiomysql==0.2.0
+pymysql==1.1.1
+cryptography==43.0.3
+pillow==11.0.0

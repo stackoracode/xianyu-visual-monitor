@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}{{ customer.display_name }}{% endblock %}
+{% block content %}
+<h1>{{ customer.display_name }} <span class="pill">{{ t('status.' ~ customer.status) }}</span></h1>
+<p class="muted">ID {{ customer.id }}{% if customer.merged_into %} → <a href="/customers/{{ customer.merged_into }}">{{ customer.merged_into }}</a>{% endif %}</p>
+<div class="grid">
+<section class="card">
+  <h2>{{ t('customers.identity') }}</h2>
+  <form method="post" action="/customers/{{ customer.id }}/action">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="status">
+    <label>{{ t('common.status') }} <select name="status">{% for s in statuses %}<option value="{{ s }}" {% if s == customer.status %}selected{% endif %}>{{ t('status.' ~ s) }}</option>{% endfor %}</select></label>
+    <label>{{ t('customers.notes') }} <textarea name="notes" rows="3">{{ customer.notes or '' }}</textarea></label>
+    <button>{{ t('common.save') }}</button>
+  </form>
+  <h3>{{ t('customers.aliases') }}</h3>
+  <ul>{% for a in aliases %}<li>{{ a.display_name }} <span class="muted">({{ a.source }})</span>
+    <form method="post" action="/customers/{{ customer.id }}/action" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="remove_alias"><input type="hidden" name="alias_id" value="{{ a.id }}"><button class="link">{{ t('common.remove') }}</button></form></li>{% endfor %}</ul>
+  <form method="post" action="/customers/{{ customer.id }}/action" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="add_alias">
+    <input name="alias" placeholder="{{ t('customers.alias_placeholder') }}" required><button>{{ t('customers.add_alias') }}</button>
+  </form>
+  <p class="muted">{{ t('customers.avatars') }}: {{ avatars|length }}</p>
+  <h3>{{ t('customers.merge') }}</h3>
+  <p class="hint">{{ t('customers.merge_hint') }}</p>
+  <form method="post" action="/customers/{{ customer.id }}/action" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="merge">
+    <input name="target_id" placeholder="{{ t('customers.target_id') }}" required size="38"><button class="danger">{{ t('customers.merge_button') }}</button>
+  </form>
+</section>
+<section class="card">
+  <h2>{{ t('customers.visible_state') }}</h2>
+  {% if state %}<dl>
+    <dt>{{ t('common.preview') }}</dt><dd class="source">{{ state.preview_raw }}</dd>
+    <dt>{{ t('customers.badge') }}</dt><dd>{{ state.badge_count if state.badge_present else '-' }}</dd>
+    <dt>{{ t('common.time') }}</dt><dd class="source">{{ state.time_text }}</dd>
+    <dt>{{ t('customers.observed_at') }}</dt><dd>{{ state.observed_at|iso }}</dd></dl>
+  {% else %}<p>{{ t('common.none') }}</p>{% endif %}
+  <h3>{{ t('nav.notifications') }}</h3>
+  {% for j in jobs %}<p><span class="pill">{{ j.status }}</span> {{ j.updated_at|iso }} {{ j.last_error or '' }}</p>{% else %}<p>{{ t('customers.no_notification') }}</p>{% endfor %}
+  <form method="post" action="/customers/{{ customer.id }}/action">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="notify">
+    <button>{{ t('customers.notify_now') }}</button> <span class="hint">{{ t('customers.notify_hint') }}</span>
+  </form>
+</section>
+</div>
+<section class="card">
+  <h2>{{ t('nav.observations') }}</h2>
+  <table><tr><th>{{ t('common.time') }}</th><th>{{ t('obs.kind') }}</th><th>{{ t('common.preview') }}</th><th>{{ t('obs.badge') }}</th><th>{{ t('obs.signals') }}</th><th>{{ t('obs.confidence') }}</th></tr>
+  {% for e in events %}<tr><td>{{ e.captured_at|iso }}</td><td>{{ t('kind.' ~ e.kind) }}</td><td class="source">{{ e.preview_raw }}</td><td>{{ e.badge_before }} → {{ e.badge_after }}</td><td><code>{{ e.signals }}</code></td><td>{{ '%.2f'|format(e.confidence) }}</td></tr>{% endfor %}
+  </table>
+</section>
+<section class="card">
+  <h2>{{ t('nav.replies') }}</h2>
+  <table><tr><th>{{ t('common.time') }}</th><th>{{ t('common.status') }}</th><th>{{ t('replies.trigger') }}</th><th>{{ t('replies.reply') }}</th></tr>
+  {% for i in intents %}<tr><td>{{ i.created_at|iso }}</td><td>{{ i.status }}</td><td class="source">{{ i.trigger_text }}</td><td class="source">{{ i.reply_text }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endblock %}

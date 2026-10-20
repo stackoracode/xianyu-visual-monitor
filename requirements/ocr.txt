@@ -1,0 +1,11 @@
+# Worker-only OCR stack (RapidOCR = PaddleOCR models on ONNX Runtime, CPU).
+# onnxruntime 1.20.1 aarch64 wheels are manylinux_2_27/2_28 -> OK on glibc 2.31.
+# opencv-python needs libgl1 and libglib2.0-0 from apt on headless hosts.
+-r base.txt
+rapidocr-onnxruntime==1.3.24
+onnxruntime==1.20.1
+numpy==1.26.4
+opencv-python==4.10.0.84
+shapely==2.0.6
+pyclipper==1.3.0.post6
+pyyaml==6.0.2

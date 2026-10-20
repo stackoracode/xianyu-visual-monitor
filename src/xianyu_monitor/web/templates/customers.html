@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.customers') }}{% endblock %}
+{% block content %}
+<h1>{{ t('nav.customers') }}</h1>
+<p class="hint">{{ t('customers.intro') }}</p>
+<form method="get" action="/customers" class="filters">
+  <input name="q" value="{{ q }}" placeholder="{{ t('customers.search') }}">
+  <select name="status"><option value="">{{ t('common.all') }}</option>
+    {% for s in statuses %}<option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ t('status.' ~ s) }}</option>{% endfor %}
+  </select>
+  <button>{{ t('common.filter') }}</button>
+</form>
+<table>
+  <tr><th>{{ t('common.name') }}</th><th>{{ t('common.status') }}</th><th>{{ t('customers.baseline') }}</th><th>{{ t('customers.first_observed') }}</th><th>{{ t('customers.last_observed') }}</th><th>{{ t('customers.notified') }}</th></tr>
+  {% for c in customers %}
+  <tr><td><a href="/customers/{{ c.id }}">{{ c.display_name }}</a></td><td><span class="pill">{{ t('status.' ~ c.status) }}</span></td>
+    <td>{{ '✓' if c.is_baseline else '' }}</td><td>{{ c.first_observed_at|iso or '-' }}</td><td>{{ c.last_observed_at|iso or '-' }}</td><td>{{ c.notified_at|iso or '-' }}</td></tr>
+  {% else %}<tr><td colspan="6">{{ t('common.none') }}</td></tr>{% endfor %}
+</table>
+{% if customers|length == page_size %}<p><a href="/customers?status={{ status }}&q={{ q }}&offset={{ offset + page_size }}">{{ t('common.next_page') }}</a></p>{% endif %}
+<section class="card">
+  <h2>{{ t('customers.import') }}</h2>
+  <p class="hint">{{ t('customers.import_hint') }}</p>
+  <form method="post" action="/customers/import">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <textarea name="names" rows="6"></textarea>
+    <button>{{ t('customers.import_button') }}</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,66 @@
+:root {
+  --bg: #f6f7f9; --fg: #1d2330; --muted: #6b7280; --card: #ffffff; --line: #e3e6eb;
+  --accent: #2563eb; --ok: #15803d; --bad: #b91c1c; --warn: #a16207; --info: #1e40af;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14171c; --fg: #e5e7eb; --muted: #9ca3af; --card: #1d2128; --line: #2d333d;
+          --accent: #60a5fa; --ok: #4ade80; --bad: #f87171; --warn: #facc15; --info: #93c5fd; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "Noto Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+       background: var(--bg); color: var(--fg); }
+a { color: var(--accent); }
+header.top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 10px 16px;
+             background: var(--card); border-bottom: 1px solid var(--line); }
+header .brand { font-weight: 600; }
+header nav { display: flex; flex-wrap: wrap; gap: 10px; flex: 1; }
+header nav a { text-decoration: none; }
+header .right { display: flex; gap: 8px; align-items: center; }
+.lang.active { font-weight: 700; text-decoration: none; }
+main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+footer { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
+h1 { font-size: 22px; margin: 4px 0 12px; }
+h2 { font-size: 16px; margin: 0 0 10px; }
+h3 { font-size: 14px; margin: 10px 0 6px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 0 0 14px; overflow-x: auto; }
+.card.narrow { max-width: 380px; margin: 40px auto; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+table { width: 100%; border-collapse: collapse; background: var(--card); }
+th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; white-space: nowrap; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; word-break: break-word; }
+input, select, textarea, button { font: inherit; color: inherit; }
+input, select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; }
+textarea { width: 100%; }
+textarea.code, pre.code { font: 12px/1.4 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+pre.code { white-space: pre-wrap; background: var(--bg); padding: 8px; border-radius: 6px; }
+button, a.button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; text-decoration: none; display: inline-block; }
+button.danger { background: var(--bad); }
+button.link { background: none; color: var(--accent); padding: 0; text-decoration: underline; }
+form.inline { display: inline-flex; gap: 6px; align-items: center; margin: 2px 4px 2px 0; }
+form.stack { display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+form.stack label { display: flex; flex-direction: column; gap: 3px; }
+form.stack label.check { flex-direction: row; align-items: center; gap: 6px; }
+form.filters, form.actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.narrow form label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; }
+.pill.ok { color: var(--ok); border-color: var(--ok); }
+.pill.bad, .bad { color: var(--bad); border-color: var(--bad); }
+.muted { color: var(--muted); }
+.small { font-size: 11px; }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+.source { font-family: inherit; }
+.banners { padding: 8px 16px 0; max-width: 1400px; margin: 0 auto; }
+.banner, .flash { padding: 8px 12px; border-radius: 6px; margin: 0 0 8px; border: 1px solid var(--line); background: var(--card); }
+.banner.error, .flash.error { border-color: var(--bad); color: var(--bad); }
+.banner.warn { border-color: var(--warn); color: var(--warn); }
+.banner.info, .flash.info { border-color: var(--info); color: var(--info); }
+img.frame { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+table.controls td, table.settings td { vertical-align: middle; }
+code { font-size: 12px; word-break: break-word; }
+@media (max-width: 640px) {
+  header.top { flex-direction: column; align-items: flex-start; }
+  dl { grid-template-columns: 1fr; }
+}

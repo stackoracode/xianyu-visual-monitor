@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.settings') }}{% endblock %}
+{% block content %}
+<h1>{{ t('nav.settings') }}</h1>
+<p class="hint">{{ t('settings.intro') }}</p>
+<form method="post" action="/settings">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  {% for g in groups %}
+  <section class="card">
+    <h2>{{ t('settings.group.' ~ g) }}</h2>
+    <table class="settings">
+    {% for s in specs if s.group == g %}
+      <tr><th><label for="s-{{ s.key }}">{{ t('setting.' ~ s.key) }}</label><div class="muted small">{{ s.key }}</div></th><td>
+      {% if s.kind == 'bool' %}<input id="s-{{ s.key }}" type="checkbox" name="{{ s.key }}" value="1" {% if rt[s.key] %}checked{% endif %}>
+      {% elif s.kind == 'choice' %}<select id="s-{{ s.key }}" name="{{ s.key }}">{% for c in s.choices %}<option value="{{ c }}" {% if rt[s.key] == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select>
+      {% elif s.kind == 'list' %}<textarea id="s-{{ s.key }}" name="{{ s.key }}" rows="4">{{ rt[s.key]|join('\n') }}</textarea>
+      {% else %}<input id="s-{{ s.key }}" name="{{ s.key }}" value="{{ rt[s.key] }}" {% if s.minimum is not none %}data-min="{{ s.minimum }}"{% endif %}>{% endif %}
+      </td></tr>
+    {% endfor %}
+    </table>
+  </section>
+  {% endfor %}
+  <button>{{ t('common.save') }}</button>
+</form>
+<section class="card">
+  <h2>{{ t('settings.static') }}</h2>
+  <p class="hint">{{ t('settings.static_hint') }}</p>
+  <pre class="code">{{ static|tojson_pretty }}</pre>
+</section>
+<section class="card">
+  <h2>{{ t('account.password') }}</h2>
+  <form method="post" action="/account/password" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label>{{ t('account.current') }} <input type="password" name="current" autocomplete="current-password" required></label>
+    <label>{{ t('account.new') }} <input type="password" name="new" autocomplete="new-password" minlength="10" required></label>
+    <button>{{ t('common.save') }}</button>
+  </form>
+</section>
+{% endblock %}

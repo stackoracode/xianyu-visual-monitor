@@ -1,0 +1,7 @@
+{# usage: include with action, label, confirm(bool), cls #}
+<form method="post" action="/control" class="inline control">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="action" value="{{ action }}">
+  {% if confirm %}<input name="confirm" placeholder="{{ t('control.type_word', word=confirm_word) }}" size="10" required>{% endif %}
+  <button class="{{ cls or '' }}">{{ label }}</button>
+</form>

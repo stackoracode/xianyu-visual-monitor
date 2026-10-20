@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.notifications') }}{% endblock %}
+{% block content %}
+<h1>{{ t('nav.notifications') }}</h1>
+<p class="hint">{{ t('notifications.intro') }}</p>
+<section class="card">
+  <h2>{{ t('notifications.smtp') }}</h2>
+  <p>{{ t('notifications.smtp_configured') }}: <strong>{{ t('common.yes') if smtp_configured else t('common.no') }}</strong> · {{ t('notifications.recipients') }}: <strong>{{ recipients }}</strong></p>
+  <form method="post" action="/notifications/smtp-test" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button>{{ t('notifications.test_connection') }}</button></form>
+  <form method="post" action="/notifications/smtp-test" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="send" value="1"><button>{{ t('notifications.send_test') }}</button></form>
+</section>
+<p>{% for s in ['', 'pending', 'leased', 'succeeded', 'failed', 'uncertain', 'cancelled'] %}<a href="/notifications?status={{ s }}">{{ t('job.' ~ s) if s else t('common.all') }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+<table>
+  <tr><th>ID</th><th>{{ t('notifications.type') }}</th><th>{{ t('common.status') }}</th><th>{{ t('notifications.attempts') }}</th><th>{{ t('notifications.phase') }}</th><th>{{ t('common.created') }}</th><th>{{ t('notifications.error') }}</th><th>{{ t('notifications.result') }}</th><th></th></tr>
+  {% for j in jobs %}
+  <tr><td>{{ j.id }}</td><td>{{ j.payload.get('type') }}{% if j.payload.get('display_name') %} · <span class="source">{{ j.payload.get('display_name') }}</span>{% endif %}</td>
+    <td><span class="pill {{ 'bad' if j.status in ['failed', 'uncertain'] else '' }}">{{ t('job.' ~ j.status) }}</span></td>
+    <td>{{ j.attempts }}/{{ j.max_attempts }}</td><td>{{ j.phase }}</td><td>{{ j.created_at|iso }}</td><td>{{ j.last_error or '' }}</td><td><code>{{ j.result or '' }}</code></td>
+    <td>{% if j.status in ['failed', 'uncertain', 'cancelled'] %}<form method="post" action="/jobs/{{ j.id }}/action" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="retry"><button>{{ t('notifications.retry') }}</button></form>{% endif %}
+        {% if j.status in ['pending', 'failed', 'uncertain'] %}<form method="post" action="/jobs/{{ j.id }}/action" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="cancel"><button>{{ t('notifications.cancel') }}</button></form>{% endif %}
+        {% if j.status == 'uncertain' %}<form method="post" action="/jobs/{{ j.id }}/action" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="resolve_succeeded"><button>{{ t('notifications.mark_received') }}</button></form>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="9">{{ t('common.none') }}</td></tr>{% endfor %}
+</table>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ t('nav.review') }}{% endblock %}
+{% block content %}
+<h1>{{ t('nav.review') }}</h1>
+<p class="hint">{{ t('review.intro') }}</p>
+<p><a href="/review?status=open">{{ t('review.open') }}</a> · <a href="/review?status=resolved">{{ t('review.resolved') }}</a> · <a href="/review?status=dismissed">{{ t('review.dismissed') }}</a></p>
+{% for item in items %}
+<section class="card">
+  <h3><span class="pill">{{ t('review.kind.' ~ item.kind) }}</span> <span class="source">{{ item.observed_name or '?' }}</span></h3>
+  <dl>
+    <dt>{{ t('common.preview') }}</dt><dd class="source">{{ item.observed_preview or '-' }}</dd>
+    <dt>{{ t('review.reasons') }}</dt><dd>{% for r in item.reasons or [] %}<span class="pill">{{ t('reason.' ~ r) }}</span> {% endfor %}</dd>
+    <dt>{{ t('review.seen') }}</dt><dd>{{ item.seen_count }} · {{ item.created_at|iso }} → {{ item.last_seen_at|iso }}</dd>
+    {% if item.customer_id %}<dt>{{ t('review.customer') }}</dt><dd><a href="/customers/{{ item.customer_id }}">{{ names.get(item.customer_id, item.customer_id) }}</a></dd>{% endif %}
+    {% if item.candidates %}<dt>{{ t('review.candidates') }}</dt><dd>{% for c in item.candidates %}<a href="/customers/{{ c }}">{{ names.get(c, c) }}</a> <code>{{ c }}</code><br>{% endfor %}</dd>{% endif %}
+    {% if item.resolution %}<dt>{{ t('review.resolution') }}</dt><dd>{{ item.resolution }} · {{ item.resolved_by }} · {{ item.resolved_at|iso }}</dd>{% endif %}
+  </dl>
+  {% if item.status == 'open' %}
+  <form method="post" action="/review/{{ item.id }}/resolve" class="actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <select name="action">
+      <option value="link">{{ t('review.action.link') }}</option>
+      <option value="new_customer">{{ t('review.action.new_customer') }}</option>
+      <option value="baseline">{{ t('review.action.baseline') }}</option>
+      <option value="ignore">{{ t('review.action.ignore') }}</option>
+      <option value="system">{{ t('review.action.system') }}</option>
+      <option value="dismiss">{{ t('review.action.dismiss') }}</option>
+    </select>
+    <input name="customer_id" placeholder="{{ t('review.customer_id_for_link') }}" size="38" value="{{ (item.candidates or [''])[0] }}">
+    <button>{{ t('review.apply') }}</button>
+  </form>
+  {% endif %}
+</section>
+{% else %}<p>{{ t('common.none') }}</p>{% endfor %}
+{% endblock %}

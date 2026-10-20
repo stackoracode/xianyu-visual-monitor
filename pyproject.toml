@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xianyu-visual-monitor"
+version = "1.0.0"
+description = "Screenshot/OCR-only monitor for an existing Xianyu web chat desktop session, with new-customer email alerts and owner-enabled keyword replies."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10,<3.13"
+authors = [{ name = "xianyu-visual-monitor contributors" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: POSIX :: Linux",
+  "Framework :: FastAPI",
+]
+# Exact, tested pins live in requirements/*.txt. These ranges keep the package installable.
+dependencies = [
+  "fastapi>=0.115,<0.116",
+  "uvicorn>=0.32,<0.33",
+  "jinja2>=3.1,<4",
+  "itsdangerous>=2.2,<3",
+  "python-multipart>=0.0.20,<0.1",
+  "pydantic>=2.10,<2.11",
+  "sqlalchemy[asyncio]>=2.0.36,<2.1",
+  "alembic>=1.14,<1.15",
+  "aiomysql>=0.2,<0.3",
+  "pymysql>=1.1,<1.2",
+  "cryptography>=43,<44",
+  "pillow>=11.0,<12",
+]
+
+[project.optional-dependencies]
+ocr = [
+  "rapidocr-onnxruntime==1.3.24",
+  "onnxruntime>=1.20,<1.21",
+  "numpy>=1.26,<2",
+]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<0.25",
+  "httpx>=0.28,<0.29",
+  "aiosqlite>=0.20,<0.21",
+  "ruff==0.8.4",
+]
+
+[project.scripts]
+xianyu-monitor = "xianyu_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+xianyu_monitor = [
+  "web/templates/*.html",
+  "web/static/*",
+  "i18n/locales/*.json",
+  "examples/*.json",
+  "migrations/*.py",
+  "migrations/*.mako",
+  "migrations/versions/*.py",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "mysql: requires XVM_TEST_MYSQL_URL pointing at a disposable MySQL database",
+  "real_ocr: requires an installed OCR backend (RapidOCR or Tesseract) and CJK fonts",
+]
+filterwarnings = ["ignore::DeprecationWarning:aiomysql.*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B008", "UP038"]

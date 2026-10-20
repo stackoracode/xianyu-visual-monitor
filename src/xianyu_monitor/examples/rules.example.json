@@ -1,0 +1,30 @@
+[
+  {
+    "name": "Availability question",
+    "enabled": false,
+    "priority": 100,
+    "match_type": "contains",
+    "match_mode": "any",
+    "patterns": ["还在吗", "在吗", "还有吗", "is this available"],
+    "exclude_patterns": ["不在"],
+    "template": "您好，宝贝还在的，可以直接拍下哦～",
+    "cooldown_seconds": 3600,
+    "scope": "all",
+    "allow_sensitive": false,
+    "requires_review": false
+  },
+  {
+    "name": "Shipping time",
+    "enabled": false,
+    "priority": 90,
+    "match_type": "contains",
+    "match_mode": "any",
+    "patterns": ["什么时候发货", "多久发货", "when will you ship"],
+    "exclude_patterns": [],
+    "template": "您好，拍下后一般24小时内发货。",
+    "cooldown_seconds": 7200,
+    "scope": "all",
+    "allow_sensitive": false,
+    "requires_review": true
+  }
+]
