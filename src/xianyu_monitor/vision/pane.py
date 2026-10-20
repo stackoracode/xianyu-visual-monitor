@@ -76,3 +76,31 @@ def find_bubbles(frame: Image.Image, pane: Box, colors: Colors, min_w: int = 24,
             ))
     bubbles.sort(key=lambda b: (b.box[3], b.box[0]))
     return bubbles
+
+
+def has_send_failure(frame: Image.Image, bubble: Box, pane: Box, colors: Colors) -> bool:
+    """Conservatively detect a red error indicator immediately left of an outgoing bubble.
+
+    Never inspect row unread badges or the right-hand avatar. A red icon here is
+    sufficient to withhold success; real-page calibration is still required.
+    """
+    left, top, _, bottom = bubble
+    region = frame.convert("RGB").crop((max(pane[0], left - 40), top, left, bottom))
+    red = {(x, y) for y in range(region.height) for x in range(region.width)
+           if (p := region.getpixel((x, y)))[0] >= colors.badge_red_min
+           and p[1] <= colors.badge_green_max and p[2] <= colors.badge_blue_max}
+    while red:
+        pending = [red.pop()]
+        component = []
+        while pending:
+            x, y = pending.pop()
+            component.append((x, y))
+            for point in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if point in red:
+                    red.remove(point)
+                    pending.append(point)
+        width = max(x for x, _ in component) - min(x for x, _ in component) + 1
+        height = max(y for _, y in component) - min(y for _, y in component) + 1
+        if len(component) >= 8 and 2 <= width <= 32 and 6 <= height <= 32:
+            return True
+    return False

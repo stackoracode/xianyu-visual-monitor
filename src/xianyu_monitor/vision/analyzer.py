@@ -19,7 +19,7 @@ from xianyu_monitor.ocr.base import EMPTY, OcrResult
 from xianyu_monitor.ocr.pool import BLOCK_PREFIX, OcrPool
 from xianyu_monitor.runtime_settings import RuntimeSettings
 from xianyu_monitor.vision import imageops
-from xianyu_monitor.vision.pane import find_bubbles
+from xianyu_monitor.vision.pane import find_bubbles, has_send_failure
 from xianyu_monitor.vision.profile import Profile
 
 
@@ -83,6 +83,7 @@ class PaneObservation:
     bubbles: list[Bubble]
     composer_text: str
     composer_conf: float
+    send_failure: bool = False
 
     @property
     def last_bubble(self) -> Bubble | None:
@@ -312,7 +313,9 @@ class FrameAnalyzer:
             requests.append(("title", title_crop))
         composer_crop = self.composer_crop(frame)
         if composer_crop is not None:
-            requests.append(("composer", composer_crop))
+            # The textarea can wrap or contain explicit newlines. Read the whole
+            # block so pre-send verification cannot silently accept a single line.
+            requests.append((BLOCK_PREFIX + "composer", composer_crop))
         boxes = []
         if p.message_pane is not None:
             boxes = find_bubbles(frame, p.message_pane, p.colors, p.min_bubble_width, p.min_bubble_height)
@@ -320,9 +323,12 @@ class FrameAnalyzer:
                 requests.append((f"b{i}", self.bubble_text_crop(frame, bubble.box)))
         results = await self.ocr.recognize(requests)
         title = results.get("title", EMPTY)
-        composer = results.get("composer", EMPTY)
+        composer = results.get(BLOCK_PREFIX + "composer", EMPTY)
         bubbles = []
         for i, bubble in enumerate(boxes):
             res = results.get(f"b{i}", EMPTY)
             bubbles.append(Bubble(bubble.direction, res.text.strip(), res.confidence, bubble.box))
-        return PaneObservation(title.text.strip(), title.confidence, bubbles, composer.text.strip(), composer.confidence)
+        failed = any(b.direction == "outgoing" and has_send_failure(frame, b.box, p.message_pane, p.colors)
+                     for b in boxes) if p.message_pane is not None else False
+        return PaneObservation(title.text.strip(), title.confidence, bubbles, composer.text.strip(),
+                               composer.confidence, failed)

@@ -1,7 +1,7 @@
 # 部署指南（中文）
 
-> 以下步骤由店主在开发板上执行。**本仓库开发者未在真实开发板上执行过这些步骤。** CI 只在 ARM64
-> Ubuntu 20.04 容器中复现了目标平台（见 [COMPATIBILITY.md](../COMPATIBILITY.md)，英文）。
+> CI 在 ARM64 Ubuntu 20.04 容器中验证兼容性（见 [COMPATIBILITY.md](../COMPATIBILITY.md)）。
+> 每次部署仍须动态核实桌面布局，并单独记录受控验收结果。
 
 目标环境：鲁班猫 RK3588，ARM64，Ubuntu 20.04.6，glibc 2.31，XFCE/Xvnc（实测为 `:10`，1280x720，16 位色深），
 Chrome 中已打开闲鱼聊天页面。程序不使用系统自带的 Python 3.8，而是通过 Conda 安装 Python 3.10。
@@ -11,12 +11,16 @@ Conda 装在独立目录中，不会修改系统 glibc 或系统 Python。
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y mysql-server scrot xdotool xclip libgl1 libglib2.0-0
+sudo apt-get install -y scrot xdotool xclip libgl1 libglib2.0-0
 # 可选的备用 OCR：
 sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim
 ```
 
 ## 2. 通过 Conda 安装 Python 3.10
+
+已有 Conda 时直接复用。可用 `conda create --clone <已有py310环境> -p /opt/xianyu-monitor/env`
+创建独立环境；运行时需位于 `/opt`，确保 `ProtectHome=true` 的 `xvm` 后台服务可访问。
+不要使用解释器或标准库位于 `/root` 内的 venv。仅在没有适用 Conda 时执行以下安装：
 
 ```bash
 curl -fsSLO https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh
@@ -49,9 +53,19 @@ sudoedit /etc/xianyu-monitor/monitor.env
 
 ## 5. MySQL
 
+复用 1Panel 管理的现有 MySQL 8（本机 3306），不要另装 mysql-server、重建容器或清空数据卷。
+Docker、Compose 也无需重装。为应用创建独立数据库和账号，随机密码应与 SSH 和 MySQL 管理员密码不同。
+容器内看到的 TCP 来源通常是桥接网关，因此应用账号使用 `%`，权限只授予 `xianyu_monitor.*`；
+3306 仅允许受信任主机连接。
+
 ```bash
-sudoedit deploy/mysql-init.sql      # 密码需与 monitor.env 一致
-sudo mysql < deploy/mysql-init.sql
+install -m 0600 deploy/mysql-init.sql /root/xvm-init.sql
+sudoedit /root/xvm-init.sql  # 只在这份私密副本中修改密码，与 monitor.env 保持一致
+# 替换为 1Panel 已有容器名称；交互输入管理员密码，不在命令中传递。
+docker cp /root/xvm-init.sql <已有MySQL容器名>:/tmp/xvm-init.sql
+docker exec -it <已有MySQL容器名> mysql -uroot -p
+# MySQL 提示符中执行 SOURCE /tmp/xvm-init.sql;
+# 初始化完成后删除两份临时 SQL 文件。
 sudo -u xvm env XVM_ENV_FILE=/etc/xianyu-monitor/monitor.env /opt/xianyu-monitor/env/bin/xianyu-monitor migrate
 sudo -u xvm env XVM_ENV_FILE=/etc/xianyu-monitor/monitor.env /opt/xianyu-monitor/env/bin/xianyu-monitor create-admin --username owner
 ```

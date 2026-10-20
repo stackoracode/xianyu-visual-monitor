@@ -10,7 +10,8 @@ Sequence (each step re-captures the screen and re-checks; any doubt aborts):
                            owner is not typing).
 4. ``typing``            - persisted *before* any keystroke; from here on a crash leaves the
                            job ``uncertain`` and it is never retried automatically.
-5. ``verifying_send``    - the newest bubble is outgoing and matches the reply text.
+5. ``verifying_draft``   - recheck layout, target, trigger and the full pasted draft.
+6. ``verifying_send``    - watch for failed-send indicators throughout the timeout.
 
 Unverifiable sends are ``sent_unverified`` and pause automatic replies for the owner.
 """
@@ -20,6 +21,8 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -69,21 +72,28 @@ def _text_matches(observed: str, expected: str, threshold: float) -> bool:
 
 class ReplyExecutor:
     def __init__(self, analyzer: FrameAnalyzer, capture: CaptureFn, input_adapter: InputAdapter,
-                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep):
+                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+                 monotonic: Callable[[], float] = time.monotonic):
         self.analyzer = analyzer
         self.capture = capture
         self.input = input_adapter
         self.sleep = sleep
+        self.monotonic = monotonic
 
-    async def _pane(self) -> tuple[Image.Image, PaneObservation]:
+    async def _pane(self, rt: RuntimeSettings, now) -> tuple[PaneObservation, str]:
         frame = await self.capture()
-        return frame, await self.analyzer.analyze_pane(frame)
+        obs = await self.analyzer.analyze(frame, now(), rt.with_overrides(challenge_probe_every_n_frames=1),
+                                          force_full=True)
+        return await self.analyzer.analyze_pane(frame), obs.status
 
     def _title_matches(self, pane: PaneObservation, target: ReplyTarget, rt: RuntimeSettings) -> bool:
         if pane.title_conf < float(rt.ocr_min_confidence):
             return False
         title = normalize_name(pane.title)
-        return any(alias and (title == alias or title.startswith(alias)) for alias in target.aliases)
+        # The page appends a masked account ID in parentheses. Remove only that
+        # explicit decoration, never accept an arbitrary display-name prefix.
+        title = re.sub(r"\([^()]*\*{2,}[^()]*\)$", "", title)
+        return bool(title) and title in target.aliases
 
     def _composer_empty(self, pane: PaneObservation) -> bool:
         text = normalize(pane.composer_text).replace(" ", "")
@@ -99,7 +109,8 @@ class ReplyExecutor:
         profile = self.analyzer.profile
         threshold = float(rt.reply_text_match_similarity)
         min_conf = float(rt.ocr_min_confidence)
-        if profile.composer_click is None or profile.message_pane is None or profile.conversation_title is None:
+        if (profile.composer_click is None or profile.composer is None or profile.message_pane is None
+                or profile.conversation_title is None):
             return ReplyOutcome("aborted", "calibration_incomplete_for_replies", pause_replies=True)
 
         # 1. precheck
@@ -140,7 +151,9 @@ class ReplyExecutor:
         # 3. verify target conversation
         if not await set_phase("verifying_target"):
             return ReplyOutcome("aborted", "lease_lost", clicked=True)
-        _, pane = await self._pane()
+        pane, status = await self._pane(rt, now)
+        if status != "ok" or pane.send_failure:
+            return ReplyOutcome("aborted", "unsafe_target_screen", pause_replies=True, clicked=True)
         if not self._title_matches(pane, target, rt):
             return ReplyOutcome("aborted", "conversation_title_mismatch", pause_replies=True, clicked=True,
                                 details={"title": pane.title})
@@ -164,25 +177,56 @@ class ReplyExecutor:
             cx, cy = profile.composer_click
             await self.input.click(cx, cy)
             await self.input.type_text(target.reply_text)
+            await self.sleep(float(rt.reply_step_delay_seconds))
+            if not await set_phase("verifying_draft"):
+                return ReplyOutcome("aborted", "lease_lost_after_typing", pause_replies=True, clicked=True, typed=True)
+            pane, status = await self._pane(rt, now)
+            latest = pane.last_bubble
+            draft_ok = (pane.composer_conf >= min_conf and
+                        normalize(pane.composer_text).replace(" ", "") == normalize(target.reply_text).replace(" ", ""))
+            trigger_ok = (latest is not None and latest.confidence >= min_conf and latest.direction == "incoming"
+                          and normalize(latest.text) == normalize(last.text)
+                          and _text_matches(latest.text, target.trigger_text, threshold))
+            if (status != "ok" or pane.send_failure or not self._title_matches(pane, target, rt)
+                    or not draft_ok or not trigger_ok):
+                return ReplyOutcome("aborted", "draft_or_target_recheck_failed", pause_replies=True,
+                                    clicked=True, typed=True)
+            if not await set_phase("sending"):
+                return ReplyOutcome("aborted", "lease_lost_after_typing", pause_replies=True, clicked=True, typed=True)
             await self.input.press("Return")
         except InputError as exc:
             return ReplyOutcome("sent_unverified", f"input_error_during_typing:{exc}", pause_replies=True,
                                 clicked=True, typed=True)
 
         # 5. verify the send result
-        await set_phase("verifying_send")
         step = max(0.1, float(rt.reply_step_delay_seconds))
-        polls = max(1, int(float(rt.reply_verify_timeout_seconds) / step + 0.999))
+        deadline = self.monotonic() + float(rt.reply_verify_timeout_seconds)
         last_seen: dict = {}
-        for _ in range(polls):
-            await self.sleep(step)
-            _, pane = await self._pane()
+        verified = False
+        while True:
+            if not await set_phase("verifying_send"):
+                return ReplyOutcome("sent_unverified", "lease_lost_during_verification", pause_replies=True,
+                                    clicked=True, typed=True)
+            await self.sleep(min(step, max(0.0, deadline - self.monotonic())))
+            sampled_at = self.monotonic()
+            pane, status = await self._pane(rt, now)
+            if status != "ok" or not self._title_matches(pane, target, rt) or pane.send_failure:
+                return ReplyOutcome("sent_unverified", "send_failure_or_target_changed", pause_replies=True,
+                                    clicked=True, typed=True)
             newest = pane.last_bubble
+            verified = False
             if newest is not None:
                 last_seen = {"direction": newest.direction, "text": newest.text, "bubbles": len(pane.bubbles)}
                 if (newest.direction == "outgoing" and newest.confidence >= min_conf
-                        and _text_matches(newest.text, target.reply_text, threshold)):
-                    return ReplyOutcome("sent_verified", "outgoing_bubble_matches", clicked=True, typed=True,
-                                        details={**last_seen, "bubbles_before": before_count})
+                        and normalize(newest.text).replace(" ", "") == normalize(target.reply_text).replace(" ", "")
+                        and self._composer_empty(pane)):
+                    verified = True
+            # OCR itself consumes time. Still inspect a frame captured at/after
+            # the deadline, rather than accepting an early frame analyzed slowly.
+            if sampled_at >= deadline:
+                break
+        if verified:
+            return ReplyOutcome("sent_verified", "outgoing_bubble_matches_no_failure_observed", clicked=True, typed=True,
+                                details={**last_seen, "bubbles_before": before_count})
         return ReplyOutcome("sent_unverified", "send_not_confirmed_within_timeout", pause_replies=True,
                             clicked=True, typed=True, details=last_seen)

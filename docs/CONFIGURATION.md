@@ -85,6 +85,18 @@ Procedure:
 Do not let the owner's other windows cover the chat page. A covered page shows up as an anchor
 mismatch (`unknown/unhealthy`), not as "no new messages".
 
+A customer first discovered without an unread badge remains eligible for their first alert.
+A later confidently incoming transition with recent activity creates the same durable
+`new_customer:<customer_id>` outbox key; ambiguous preview changes and baseline customers
+do not trigger it. Existing jobs, including uncertain or failed jobs, prevent duplicates.
+
+Reply execution rechecks the target title, unchanged incoming bubble and complete OCR draft
+after pasting and before Enter. Masked account suffixes are excluded from the exact title
+comparison. A red error indicator next to an outgoing bubble, a changed target or an unsafe
+layout withholds success and pauses replies. The entire send verification window is observed
+to catch delayed failure icons. No observed error during that window proves only the visible
+state, not recipient delivery; real error-icon calibration remains a controlled acceptance task.
+
 ## Keyword rules
 
 | Field | Meaning |

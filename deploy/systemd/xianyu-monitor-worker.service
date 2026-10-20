@@ -1,6 +1,6 @@
 [Unit]
 Description=Xianyu Visual Monitor - capture worker (exactly one per desktop)
-After=network-online.target mysql.service
+After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]

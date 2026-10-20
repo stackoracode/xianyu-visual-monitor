@@ -28,6 +28,7 @@ from xianyu_monitor.models import (
     CustomerAlias,
     CustomerAvatar,
     Frame,
+    Job,
     MessageEvent,
     ReviewItem,
 )
@@ -282,6 +283,26 @@ class FrameProcessor:
             return
         result.events.append(event.id)
         if rt.monitor_mode == "active" and event.kind == "incoming":
+            # A customer first seen after a mobile read has no badge at discovery.
+            # Keep eligibility until later, confident incoming evidence arrives.
+            # The durable outbox key also covers restarts and uncertain SMTP sends.
+            if customer.status == "new" and not customer.is_baseline and rt.notifications_enabled:
+                rel = parse_relative(row.time_text, now) if row.time_conf >= float(rt.ocr_min_confidence) else None
+                recent = rel is None or rel.age_minutes is None or is_recent(rel, float(rt.new_customer_max_age_minutes))
+                existing = (await session.execute(select(Job.id).where(
+                    Job.dedup_key == f"new_customer:{customer.id}"))).scalar_one_or_none()
+                if recent and existing is None:
+                    job_id = await enqueue_new_customer_email(session, customer, new_customer_payload(
+                        customer, row, ["absent_from_baseline", "deferred_incoming_evidence", *transition.signals], now), rt)
+                    result.jobs.append(job_id)
+                    reviews = (await session.execute(select(ReviewItem).where(
+                        ReviewItem.customer_id == customer.id,
+                        ReviewItem.kind == "new_without_incoming_evidence",
+                        ReviewItem.status == "open"))).scalars().all()
+                    for review in reviews:
+                        review.status = "resolved"
+                        review.resolution = "incoming_evidence_observed"
+                        review.resolved_at = now
             intent = await plan_reply(session, event, customer, rt, rules)
             if intent is not None:
                 result.intents.append(intent.id)

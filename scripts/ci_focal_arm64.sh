@@ -5,13 +5,14 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 mkdir -p artifacts
 uname -m | tee artifacts/platform.txt
-ldd --version | head -1 | tee -a artifacts/platform.txt
+# Consume the complete stream: head can close early and trip pipefail with SIGPIPE (141).
+ldd --version | sed -n '1p' | tee -a artifacts/platform.txt
 grep PRETTY_NAME /etc/os-release | tee -a artifacts/platform.txt
 
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends ca-certificates curl bzip2 git libgl1 libglib2.0-0 \
   tesseract-ocr tesseract-ocr-chi-sim fonts-wqy-microhei scrot xdotool xclip xvfb mysql-server >/dev/null
-tesseract --version 2>&1 | head -1 | tee -a artifacts/platform.txt
+tesseract --version 2>&1 | sed -n '1p' | tee -a artifacts/platform.txt
 
 curl -fsSL -o /tmp/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh
 bash /tmp/miniforge.sh -b -p /opt/conda >/dev/null

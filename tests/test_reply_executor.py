@@ -1,9 +1,12 @@
 """Reply targeting and send verification against a fake desktop (no real input is sent)."""
 
+from PIL import ImageDraw
+
 from synth import FakeDesktop, Harness, SBubble, SRow
 from xianyu_monitor.detection.textnorm import normalize_name
 from xianyu_monitor.replies.executor import ReplyExecutor, ReplyTarget
 from xianyu_monitor.runtime_settings import RuntimeSettings
+from xianyu_monitor.vision.analyzer import PaneObservation
 
 RT = RuntimeSettings({"reply_step_delay_seconds": 0.1, "reply_verify_timeout_seconds": 0.3,
                       "full_validation_every_n_frames": 1000, "challenge_probe_every_n_frames": 1000})
@@ -102,3 +105,109 @@ async def test_lease_loss_stops_before_input():
 
     outcome = await executor.execute(target, RT, lost)
     assert outcome.reason == "lease_lost" and desk.actions == []
+
+
+async def test_bad_paste_is_never_sent():
+    desk, executor, target, set_phase, _ = setup()
+    original = desk.type_text
+
+    async def corrupt(text):
+        await original(text + "多余内容")
+
+    desk.type_text = corrupt
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "aborted" and outcome.pause_replies and outcome.typed
+    assert ("press", "Return") not in desk.actions
+
+
+async def test_conversation_switch_after_paste_is_never_sent():
+    desk, executor, target, set_phase, _ = setup()
+    original = desk.type_text
+
+    async def switch(text):
+        await original(text)
+        desk.selected = 1
+
+    desk.type_text = switch
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.reason == "draft_or_target_recheck_failed" and outcome.pause_replies
+    assert ("press", "Return") not in desk.actions
+
+
+async def test_prefix_name_does_not_match_target():
+    desk, executor, target, set_phase, _ = setup()
+    desk.history["买家甲冒名"] = desk.history["买家甲"]
+    original = desk.click
+
+    async def rename(x, y):
+        await original(x, y)
+        desk.rows[0].name = "买家甲冒名"
+
+    desk.click = rename
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.reason == "conversation_title_mismatch"
+    assert not any(a[0] == "type" for a in desk.actions)
+
+
+def test_masked_account_suffix_is_not_part_of_display_name():
+    _, executor, target, _, _ = setup()
+    assert executor._title_matches(PaneObservation("买家甲（t***0）", 0.99, [], "", 1), target, RT)
+    assert not executor._title_matches(PaneObservation("买家甲冒名（t***0）", 0.99, [], "", 1), target, RT)
+
+
+async def test_delayed_failed_send_icon_overrides_matching_outgoing_bubble():
+    desk, executor, target, set_phase, _ = setup()
+    original = desk.capture_async
+    polls = 0
+
+    async def capture():
+        nonlocal polls
+        frame = await original()
+        if ("press", "Return") in desk.actions:
+            polls += 1
+            if polls >= 2:
+                pane = await desk.h.analyzer.analyze_pane(frame)
+                bubble = pane.last_bubble.box
+                x, y = bubble[0] - 20, (bubble[1] + bubble[3]) // 2
+                draw = ImageDraw.Draw(frame)
+                draw.ellipse((x - 8, y - 8, x + 8, y + 8), fill=(240, 40, 40))
+                draw.line((x, y - 5, x, y + 1), fill="white", width=2)
+                draw.point((x, y + 4), fill="white")
+        return frame
+
+    executor.capture = capture
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "sent_unverified" and outcome.pause_replies
+    assert outcome.reason == "send_failure_or_target_changed" and polls == 2
+
+
+async def test_lease_loss_after_paste_never_presses_enter():
+    desk, executor, target, _, _ = setup()
+
+    async def lose(phase):
+        return phase != "sending"
+
+    outcome = await executor.execute(target, RT, lose)
+    assert outcome.pause_replies and outcome.typed and outcome.reason == "lease_lost_after_typing"
+    assert ("press", "Return") not in desk.actions
+
+
+async def test_slow_ocr_uses_elapsed_window_and_still_checks_final_frame():
+    desk, executor, target, set_phase, _ = setup()
+    elapsed = 0.0
+    post_send_captures = 0
+    original = executor._pane
+
+    async def slow_pane(rt, now):
+        nonlocal elapsed, post_send_captures
+        result = await original(rt, now)
+        if ("press", "Return") in desk.actions:
+            post_send_captures += 1
+            elapsed += 10.0  # one OCR pass already exceeds the requested window
+        return result
+
+    executor.monotonic = lambda: elapsed
+    executor._pane = slow_pane
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "sent_verified"
+    assert post_send_captures == 2  # first early frame plus a frame after the deadline
