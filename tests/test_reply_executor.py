@@ -190,3 +190,24 @@ async def test_lease_loss_after_paste_never_presses_enter():
     outcome = await executor.execute(target, RT, lose)
     assert outcome.pause_replies and outcome.typed and outcome.reason == "lease_lost_after_typing"
     assert ("press", "Return") not in desk.actions
+
+
+async def test_slow_ocr_uses_elapsed_window_and_still_checks_final_frame():
+    desk, executor, target, set_phase, _ = setup()
+    elapsed = 0.0
+    post_send_captures = 0
+    original = executor._pane
+
+    async def slow_pane(rt, now):
+        nonlocal elapsed, post_send_captures
+        result = await original(rt, now)
+        if ("press", "Return") in desk.actions:
+            post_send_captures += 1
+            elapsed += 10.0  # one OCR pass already exceeds the requested window
+        return result
+
+    executor.monotonic = lambda: elapsed
+    executor._pane = slow_pane
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "sent_verified"
+    assert post_send_captures == 2  # first early frame plus a frame after the deadline

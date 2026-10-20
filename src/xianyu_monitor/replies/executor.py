@@ -22,6 +22,7 @@ import asyncio
 import datetime as dt
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -71,11 +72,13 @@ def _text_matches(observed: str, expected: str, threshold: float) -> bool:
 
 class ReplyExecutor:
     def __init__(self, analyzer: FrameAnalyzer, capture: CaptureFn, input_adapter: InputAdapter,
-                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep):
+                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+                 monotonic: Callable[[], float] = time.monotonic):
         self.analyzer = analyzer
         self.capture = capture
         self.input = input_adapter
         self.sleep = sleep
+        self.monotonic = monotonic
 
     async def _pane(self, rt: RuntimeSettings, now) -> tuple[PaneObservation, str]:
         frame = await self.capture()
@@ -196,13 +199,16 @@ class ReplyExecutor:
                                 clicked=True, typed=True)
 
         # 5. verify the send result
-        await set_phase("verifying_send")
         step = max(0.1, float(rt.reply_step_delay_seconds))
-        polls = max(1, int(float(rt.reply_verify_timeout_seconds) / step + 0.999))
+        deadline = self.monotonic() + float(rt.reply_verify_timeout_seconds)
         last_seen: dict = {}
         verified = False
-        for _ in range(polls):
-            await self.sleep(step)
+        while True:
+            if not await set_phase("verifying_send"):
+                return ReplyOutcome("sent_unverified", "lease_lost_during_verification", pause_replies=True,
+                                    clicked=True, typed=True)
+            await self.sleep(min(step, max(0.0, deadline - self.monotonic())))
+            sampled_at = self.monotonic()
             pane, status = await self._pane(rt, now)
             if status != "ok" or not self._title_matches(pane, target, rt) or pane.send_failure:
                 return ReplyOutcome("sent_unverified", "send_failure_or_target_changed", pause_replies=True,
@@ -215,6 +221,10 @@ class ReplyExecutor:
                         and normalize(newest.text).replace(" ", "") == normalize(target.reply_text).replace(" ", "")
                         and self._composer_empty(pane)):
                     verified = True
+            # OCR itself consumes time. Still inspect a frame captured at/after
+            # the deadline, rather than accepting an early frame analyzed slowly.
+            if sampled_at >= deadline:
+                break
         if verified:
             return ReplyOutcome("sent_verified", "outgoing_bubble_matches_no_failure_observed", clicked=True, typed=True,
                                 details={**last_seen, "bubbles_before": before_count})
