@@ -20,8 +20,7 @@ def hash_password(password: str, iterations: int = PBKDF2_ITERATIONS) -> str:
         raise ValueError("password must be at least 10 characters")
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
-    return "pbkdf2_sha256${}${}${}".format(
-        iterations, base64.b64encode(salt).decode(), base64.b64encode(digest).decode())
+    return f"pbkdf2_sha256${iterations}${base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}"
 
 
 def verify_password(password: str, encoded: str) -> bool:

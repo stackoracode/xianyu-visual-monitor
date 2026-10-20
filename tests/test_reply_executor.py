@@ -1,7 +1,6 @@
 """Reply targeting and send verification against a fake desktop (no real input is sent)."""
 
 from synth import FakeDesktop, Harness, SBubble, SRow
-
 from xianyu_monitor.detection.textnorm import normalize_name
 from xianyu_monitor.replies.executor import ReplyExecutor, ReplyTarget
 from xianyu_monitor.runtime_settings import RuntimeSettings

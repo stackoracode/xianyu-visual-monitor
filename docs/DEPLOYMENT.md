@@ -39,8 +39,8 @@ sudo /opt/xianyu-monitor/env/bin/pip install -r requirements/ocr.txt
 sudo /opt/xianyu-monitor/env/bin/pip install --no-deps .
 ```
 
-The CI job publishes the exact resolved package set as `pip-freeze-focal-arm64-py310.txt`; you
-can install with `-c` against that file for a byte-for-byte match of what was tested.
+For exactly the package set that CI tested on ARM64 Ubuntu 20.04, add the lock file:
+`pip install -c requirements/constraints-focal-arm64-py310.txt -r requirements/ocr.txt`.
 
 ## 4. User, directories and private configuration
 

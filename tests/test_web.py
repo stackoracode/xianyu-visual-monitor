@@ -8,8 +8,8 @@ import zipfile
 import httpx
 import pytest
 from sqlalchemy import select
-from synth import Harness
 
+from synth import Harness
 from xianyu_monitor import state_keys
 from xianyu_monitor.db import get_state, set_state
 from xianyu_monitor.models import AdminUser, CalibrationProfile, Customer, Job, KeywordRule, ReviewItem

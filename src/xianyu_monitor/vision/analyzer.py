@@ -117,10 +117,11 @@ class FrameAnalyzer:
         avatar_box = self.profile.field_box(index, "avatar")
         badge_box = self.profile.field_box(index, "badge")
         avatar = imageops.crop(frame, avatar_box).convert("RGB").copy()
-        left = max(avatar_box[0], badge_box[0]) - avatar_box[0]
-        top = max(avatar_box[1], badge_box[1]) - avatar_box[1]
-        right = min(avatar_box[2], badge_box[2]) - avatar_box[0]
-        bottom = min(avatar_box[3], badge_box[3]) - avatar_box[1]
+        margin = 3  # badge rendering may spill a pixel or two beyond its calibrated box
+        left = max(avatar_box[0], badge_box[0] - margin) - avatar_box[0]
+        top = max(avatar_box[1], badge_box[1] - margin) - avatar_box[1]
+        right = min(avatar_box[2], badge_box[2] + margin) - avatar_box[0]
+        bottom = min(avatar_box[3], badge_box[3] + margin) - avatar_box[1]
         if right > left and bottom > top:
             avatar.paste((128, 128, 128), (left, top, right, bottom))
         return avatar

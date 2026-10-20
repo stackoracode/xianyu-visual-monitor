@@ -12,7 +12,6 @@ import asyncio
 import hashlib
 import logging
 import smtplib
-import socket
 import ssl
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -93,7 +92,7 @@ class SmtpSender:
             raise SmtpConfigError("SMTP server does not support the configured security mode") from exc
         except ssl.SSLCertVerificationError as exc:
             raise SmtpConfigError("SMTP TLS certificate verification failed") from exc
-        except (smtplib.SMTPException, OSError, socket.timeout) as exc:
+        except (smtplib.SMTPException, OSError) as exc:
             raise SmtpTransientError(f"SMTP connect failed: {type(exc).__name__}") from exc
 
     def submit(self, conn: smtplib.SMTP, message: EmailMessage) -> dict:
@@ -113,7 +112,7 @@ class SmtpSender:
             if 400 <= exc.smtp_code < 500:
                 raise SmtpTransientError(f"message temporarily rejected ({exc.smtp_code})") from exc
             raise SmtpPermanentError(f"message rejected ({exc.smtp_code})") from exc
-        except (smtplib.SMTPServerDisconnected, socket.timeout, TimeoutError, ConnectionError, OSError) as exc:
+        except (smtplib.SMTPException, OSError) as exc:  # disconnects, timeouts, resets, unexpected replies
             raise SmtpUncertainError(f"connection lost during submission: {type(exc).__name__}") from exc
         return {code_addr: list(map(str, value)) for code_addr, value in (refused or {}).items()}
 

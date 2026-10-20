@@ -19,7 +19,8 @@ ENV_PREFIX = "XVM_"
 
 class Settings(BaseModel):
     env: Literal["production", "development", "test"] = "production"
-    database_url: str = "mysql+aiomysql://xvm:CHANGE_ME@127.0.0.1:3306/xianyu_monitor?charset=utf8mb4"
+    database_url: str = Field(default="mysql+aiomysql://xvm:CHANGE_ME@127.0.0.1:3306/xianyu_monitor?charset=utf8mb4",
+                              repr=False)
     secret_key: str = Field(default="", repr=False)
     data_dir: Path = Path("/var/lib/xianyu-monitor")
     calibration_file: Path | None = None
@@ -34,11 +35,11 @@ class Settings(BaseModel):
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_security: Literal["starttls", "ssl", "none"] = "starttls"
-    smtp_username: str = ""
+    smtp_username: str = Field(default="", repr=False)
     smtp_password: str = Field(default="", repr=False)
-    smtp_from: str = ""
+    smtp_from: str = Field(default="", repr=False)
     smtp_timeout_seconds: float = 30.0
-    notify_to: list[str] = Field(default_factory=list)
+    notify_to: list[str] = Field(default_factory=list, repr=False)
 
     capture_backend: Literal["scrot", "command", "replay"] = "scrot"
     capture_display: str = "auto"

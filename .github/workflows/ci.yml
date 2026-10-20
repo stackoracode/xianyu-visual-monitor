@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff==0.8.4
-      - run: ruff check src tests scripts
+      - run: ruff check src tests scripts || (ruff check --diff src tests scripts; exit 1)
       - run: python -m compileall -q src tests scripts
       - name: Privacy scan of tracked files
         run: python scripts/privacy_scan.py

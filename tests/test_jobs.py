@@ -25,8 +25,13 @@ async def test_concurrent_claims_never_double_claim(db):
         for i in range(10):
             await enqueue(s, "email", f"k{i}", {"i": i})
     a, b = JobQueue(db, "worker-a"), JobQueue(db, "worker-b")
-    results = await asyncio.gather(*[q.claim(["email"], limit=3) for q in (a, b, a, b)])
-    ids = [job.id for batch in results for job in batch]
+    ids: list[int] = []
+    for _ in range(10):  # racing claimers may each get fewer than asked; drain until empty
+        results = await asyncio.gather(*[q.claim(["email"], limit=3) for q in (a, b, a, b)])
+        batch = [job.id for claimed in results for job in claimed]
+        if not batch:
+            break
+        ids += batch
     assert len(ids) == len(set(ids)) == 10
 
 

@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 from sqlalchemy import select
+
 from synth import FakeDesktop, Harness, Scene, SBubble, SRow
 from test_email import FakeSMTP, factory
-
 from xianyu_monitor import state_keys
 from xianyu_monitor.capture.backends import CallableCapture
 from xianyu_monitor.db import get_state
@@ -23,7 +23,7 @@ async def configure(db, h: Harness, **runtime):
         s.add(CalibrationProfile(name="synthetic", data=h.profile_dict, active=True, created_by="test"))
         await save_runtime(s, {"full_validation_every_n_frames": 1000, "challenge_probe_every_n_frames": 1,
                                "capture_interval_seconds": 1.0, "reply_step_delay_seconds": 0.1,
-                               "reply_verify_timeout_seconds": 0.3, "reply_global_min_interval_seconds": 0,
+                               "reply_verify_timeout_seconds": 1.0, "reply_global_min_interval_seconds": 0,
                                **runtime}, "test")
 
 

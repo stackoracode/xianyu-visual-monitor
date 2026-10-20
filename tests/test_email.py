@@ -1,5 +1,4 @@
 import smtplib
-import socket
 
 from sqlalchemy import delete, select
 
@@ -32,7 +31,7 @@ class FakeSMTP:
         if self.behavior == "disconnect":
             raise smtplib.SMTPServerDisconnected("connection lost")
         if self.behavior == "timeout":
-            raise socket.timeout("timed out")
+            raise TimeoutError("timed out")
         if self.behavior == "rcpt4xx":
             raise smtplib.SMTPRecipientsRefused({"owner@example.com": (450, b"mailbox busy")})
         self.sent.append(message)
@@ -90,6 +89,7 @@ async def test_connection_refused_is_retried(db, settings):
 
 
 async def test_auth_failure_is_not_retried(db, settings):
+    settings = settings.model_copy(update={"smtp_username": "monitor@example.com", "smtp_password": "app-password"})
     outcome, row = await run_job(db, settings, "auth")
     assert outcome == "failed" and "authentication" in row.last_error
 

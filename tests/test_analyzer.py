@@ -1,7 +1,6 @@
 import datetime as dt
 
 from synth import Harness, Scene, SRow, base_profile_dict, draw_scene
-
 from xianyu_monitor.runtime_settings import RuntimeSettings
 from xianyu_monitor.vision import imageops
 from xianyu_monitor.vision.pane import find_bubbles

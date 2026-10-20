@@ -1,7 +1,7 @@
 import pytest
 
+from xianyu_monitor import runtime_settings as rs
 from xianyu_monitor.replies.rules import Rule, RuleError, evaluate, render_template, validate_rule
-from xianyu_monitor.runtime_settings import DEFAULT_ATTACHMENT_MARKERS, DEFAULT_NEGATIONS, DEFAULT_SENSITIVE_TERMS
 
 
 def rule(rid=1, priority=100, patterns=("还在吗",), template="在的，{customer_name}", **kw):
@@ -11,8 +11,8 @@ def rule(rid=1, priority=100, patterns=("还在吗",), template="在的，{custo
 
 
 def decide(text, rules, status="known", truncated=None):
-    return evaluate(text, rules, customer_status=status, customer_name="买家A", sensitive_terms=DEFAULT_SENSITIVE_TERMS,
-                    attachment_markers=DEFAULT_ATTACHMENT_MARKERS, negations=DEFAULT_NEGATIONS, truncated=truncated)
+    return evaluate(text, rules, customer_status=status, customer_name="买家A", sensitive_terms=rs.DEFAULT_SENSITIVE_TERMS,
+                    attachment_markers=rs.DEFAULT_ATTACHMENT_MARKERS, negations=rs.DEFAULT_NEGATIONS, truncated=truncated)
 
 
 def test_simple_match_renders_template_literally():

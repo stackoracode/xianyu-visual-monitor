@@ -7,7 +7,7 @@ bodies) is always shown exactly as captured in its source language.
 from __future__ import annotations
 
 import json
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 LOCALES_DIR = Path(__file__).resolve().parent / "locales"
@@ -15,7 +15,7 @@ SUPPORTED = ("en", "zh")
 DEFAULT = "en"
 
 
-@lru_cache(maxsize=None)
+@cache
 def catalog(lang: str) -> dict[str, str]:
     path = LOCALES_DIR / f"{lang}.json"
     if not path.is_file():

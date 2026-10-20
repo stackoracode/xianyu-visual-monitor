@@ -60,10 +60,11 @@ async def enqueue(session: AsyncSession, kind: str, dedup_key: str, payload: dic
             session.add(job)
             await session.flush()
     except IntegrityError:
-        # A concurrent transaction inserted the same key. A locking read sees the latest
-        # committed row even under InnoDB REPEATABLE READ snapshots.
+        # A concurrent transaction inserted the same key. A *shared* locking read sees the
+        # latest committed row even under InnoDB REPEATABLE READ snapshots, and unlike
+        # FOR UPDATE it does not deadlock with other waiters holding the same S lock.
         existing = (await session.execute(
-            select(Job).where(Job.dedup_key == dedup_key).with_for_update())).scalar_one()
+            select(Job).where(Job.dedup_key == dedup_key).with_for_update(read=True))).scalar_one()
         return existing, False
     return job, True
 

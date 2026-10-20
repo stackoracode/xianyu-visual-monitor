@@ -3,8 +3,8 @@
 import datetime as dt
 
 from sqlalchemy import func, select
-from synth import Harness, Scene, SRow
 
+from synth import Harness, Scene, SRow
 from xianyu_monitor.models import Customer, Job, KeywordRule, MessageEvent, ReplyIntent, ReviewItem
 from xianyu_monitor.runtime_settings import RuntimeSettings
 from xianyu_monitor.timeutil import utcnow

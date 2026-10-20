@@ -395,7 +395,8 @@ class MonitorService:
         record = obs.status == "ok" or self.counters["consecutive_layout_failures"] <= 1 \
             or self.counters["consecutive_layout_failures"] % 20 == 0 or obs.status == "challenge"
         if record:
-            result = await self.processor.process(obs, rt, capture_ms=frame.capture_ms, image_path=image_path)
+            result = await self.processor.process(obs, rt, capture_ms=frame.capture_ms, image_path=image_path,
+                                                  pane_direction=pane_direction)
             self.counters["events"] += len(result.events)
             if result.jobs or result.intents:
                 self.wake.set()
