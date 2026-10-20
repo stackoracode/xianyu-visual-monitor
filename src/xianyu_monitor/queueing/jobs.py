@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 TERMINAL = {"succeeded", "failed", "uncertain", "cancelled"}
 # Phases after which an interrupted attempt may already have had an external effect.
-IRREVERSIBLE_PHASES = {"submitting", "typing", "sent", "verifying_send"}
+IRREVERSIBLE_PHASES = {"submitting", "typing", "verifying_draft", "sending", "sent", "verifying_send"}
 
 
 @dataclass

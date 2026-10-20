@@ -113,6 +113,36 @@ async def test_new_conversation_without_badge_goes_to_review_not_email(db, rt):
     assert item.kind == "new_without_incoming_evidence"
 
 
+async def test_mobile_read_before_discovery_defers_first_alert_until_incoming_and_survives_restart(db, rt):
+    h, proc = await seeded(db, rt)
+    rows = [SRow("手机已读的新客户", "你好", "刚刚", avatar=31)] + baseline_rows()
+    first = await run(h, proc, Scene(rows=rows), rt, 30)
+    assert len(first.new_customers) == 1 and not first.jobs
+    rows[0].preview, rows[0].badge = "还在吗", 1
+    proc = FrameProcessor(db, "restarted")
+    later = await run(h, proc, Scene(rows=rows), rt, 40)
+    assert len(later.jobs) == 1 and not later.new_customers
+    async with db.session() as s:
+        review = (await s.execute(select(ReviewItem))).scalar_one()
+        assert review.status == "resolved"
+    rows[0].badge = 2
+    again = await run(h, FrameProcessor(db, "restarted-again"), Scene(rows=rows), rt, 50)
+    assert not again.jobs
+    assert await count(db, Job) == 1
+
+
+async def test_deferred_alert_ignores_ambiguous_preview_and_disabled_notifications(db, rt):
+    h, proc = await seeded(db, rt)
+    rows = [SRow("未读证据缺失", "你好", "刚刚", avatar=31)] + baseline_rows()
+    await run(h, proc, Scene(rows=rows), rt, 30)
+    rows[0].preview = "再问一下"
+    assert not (await run(h, proc, Scene(rows=rows), rt, 40)).jobs
+    rows[0].badge = 1
+    assert not (await run(h, proc, Scene(rows=rows), rt.with_overrides(notifications_enabled=False), 50)).jobs
+    rows[0].badge = 2
+    assert len((await run(h, proc, Scene(rows=rows), rt, 60)).jobs) == 1
+
+
 async def test_unknown_name_with_old_activity_is_review(db, rt):
     h, proc = await seeded(db, rt)
     rows = baseline_rows() + [SRow("很久以前的买家", "早期消息", "10-07", badge=1, avatar=32)]

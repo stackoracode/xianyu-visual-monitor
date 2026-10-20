@@ -1,6 +1,6 @@
 [Unit]
 Description=Xianyu Visual Monitor - admin web UI
-After=network-online.target mysql.service
+After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]

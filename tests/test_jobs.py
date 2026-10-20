@@ -1,6 +1,7 @@
 import asyncio
 import datetime as dt
 
+import pytest
 from sqlalchemy import select
 
 from xianyu_monitor.models import Job
@@ -78,6 +79,18 @@ async def test_recovery_marks_irreversible_phase_uncertain(db):
     async with db.session() as s:
         rows = {r.dedup_key: r for r in (await s.execute(select(Job))).scalars()}
     assert rows["a"].status == "uncertain" and rows["b"].status == "pending"
+
+
+@pytest.mark.parametrize("phase", ["typing", "verifying_draft", "sending", "verifying_send"])
+async def test_reply_recovery_never_retypes_after_paste(db, phase):
+    async with db.transaction() as s:
+        await enqueue(s, "reply", "interrupted-reply", {})
+    old = JobQueue(db, "desk:old")
+    (job,) = await old.claim()
+    await old.set_phase(job, phase)
+    new = JobQueue(db, "desk:new")
+    assert (await new.recover(include_own_owner_prefix="desk:"))["uncertain"] == 1
+    assert await new.claim() == []
 
 
 async def test_owner_actions_on_uncertain_jobs(db):

@@ -82,6 +82,8 @@ class ScrotCapture(_SubprocessCapture):
     async def capture(self) -> CapturedFrame:
         started = time.perf_counter()
         at = utcnow()
+        if self.tmp_dir is not None:
+            self.tmp_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
         tmp_dir = str(self.tmp_dir) if self.tmp_dir else None
         fd, path = tempfile.mkstemp(prefix="xvm-", suffix=".png", dir=tmp_dir)
         os.close(fd)

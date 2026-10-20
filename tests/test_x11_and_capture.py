@@ -3,7 +3,7 @@ import os
 import pytest
 from PIL import Image
 
-from xianyu_monitor.capture.backends import CallableCapture, CaptureError, ReplayCapture
+from xianyu_monitor.capture.backends import CallableCapture, CaptureError, ReplayCapture, ScrotCapture
 from xianyu_monitor.capture.x11 import DisplayDiscoveryError, discover, list_sessions, x_env
 
 
@@ -57,3 +57,15 @@ async def test_replay_and_callable_capture(tmp_path):
     failing = CallableCapture(lambda: RuntimeError("display gone"))
     with pytest.raises(CaptureError):
         await failing.capture()
+
+
+async def test_scrot_first_capture_creates_private_runtime_directory(tmp_path, monkeypatch):
+    capture = ScrotCapture(tmp_dir=tmp_path / "fresh" / "run")
+
+    async def fake_scrot(args, stdout_png):
+        Image.new("RGB", (10, 10), "white").save(args[-1])
+
+    monkeypatch.setattr(capture, "_run", fake_scrot)
+    result = await capture.capture()
+    assert result.image.size == (10, 10)
+    assert list(capture.tmp_dir.iterdir()) == []

@@ -1,8 +1,7 @@
 # Deployment on the board
 
-> These are the steps for the owner to run on the target board. **None of this has been performed
-> on the real board by the developers of this repository.** CI only reproduces the platform in an
-> ARM64 Ubuntu 20.04 container (see [COMPATIBILITY.md](COMPATIBILITY.md)).
+> CI reproduces ARM64 Ubuntu 20.04 (see [COMPATIBILITY.md](COMPATIBILITY.md)).
+> Validate the live desktop and record controlled acceptance separately on every installation.
 
 Target: LubanCat RK3588, ARM64, Ubuntu 20.04.6, glibc 2.31, XFCE on Xvnc (measured as `:10`,
 1280x720, depth 16), Chrome showing the Xianyu chat page. The system Python 3.8 is **not** used;
@@ -12,7 +11,7 @@ Python 3.10 comes from Conda, which installs into its own prefix and leaves syst
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y mysql-server scrot xdotool xclip libgl1 libglib2.0-0
+sudo apt-get install -y scrot xdotool xclip libgl1 libglib2.0-0
 # optional alternative OCR backend:
 sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim
 ```
@@ -22,6 +21,12 @@ default clipboard-based reply typing (CJK text). `libgl1`/`libglib2.0-0` are req
 `opencv-python` wheel used by RapidOCR.
 
 ## 2. Python 3.10 via Conda
+
+Reuse an existing Conda installation when present. Keep the runtime under `/opt` so the
+`xvm` web service can access it with `ProtectHome=true`. For example, clone an existing
+Python 3.10 environment with `conda create --clone <existing-py310> -p /opt/xianyu-monitor/env`.
+Do not use a venv whose interpreter or standard library lives under `/root`.
+Only install Conda if no suitable installation exists:
 
 ```bash
 curl -fsSLO https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh
@@ -57,9 +62,24 @@ private recipient address). This file is the only place secrets live; it is not 
 
 ## 5. MySQL
 
+Reuse the existing MySQL 8 instance managed by 1Panel on local port 3306. Do not
+install another server, recreate the container, or remove existing volumes. Docker and
+Compose need no reinstall. Use a dedicated database and account with a random password
+that differs from SSH and MySQL administrator passwords.
+
+Copy `deploy/mysql-init.sql` to a private file outside this checkout, replace its password
+placeholder there, and run it through the existing container. Container TCP connections
+arrive from the bridge gateway, so the application's account uses host `%`; grants remain
+limited to `xianyu_monitor.*`. Keep port 3306 restricted to trusted hosts.
+
 ```bash
-sudoedit deploy/mysql-init.sql      # set the same password as in monitor.env
-sudo mysql < deploy/mysql-init.sql
+install -m 0600 deploy/mysql-init.sql /root/xvm-init.sql
+sudoedit /root/xvm-init.sql
+# Use the actual existing 1Panel container name. Password is prompted, never passed via -p.
+docker cp /root/xvm-init.sql <existing-mysql-container>:/tmp/xvm-init.sql
+docker exec -it <existing-mysql-container> mysql -uroot -p
+# At the mysql prompt: SOURCE /tmp/xvm-init.sql;
+# Remove both temporary SQL files after successful initialization.
 cd /opt/xianyu-monitor/src
 sudo -u xvm env XVM_ENV_FILE=/etc/xianyu-monitor/monitor.env /opt/xianyu-monitor/env/bin/xianyu-monitor migrate
 sudo -u xvm env XVM_ENV_FILE=/etc/xianyu-monitor/monitor.env /opt/xianyu-monitor/env/bin/xianyu-monitor create-admin --username owner
