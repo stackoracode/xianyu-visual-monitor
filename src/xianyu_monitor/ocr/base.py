@@ -63,12 +63,16 @@ class RapidOcrEngine:
         prepared = imageops.prepare_for_ocr(image, self._scale).convert("RGB")
         array = np.asarray(prepared)
         # Recognition-only on a pre-cropped single line is faster and avoids detector misses
-        # on tiny crops. Fall back to the full pipeline if the recognizer returns nothing.
+        # on tiny crops. A field with lots of blank padding may distort recognition.
+        # For low confidence, cross-check with detection without cutting off any text.
         result, _ = self._engine(array, use_det=False, use_cls=False, use_rec=True)
         text, score = _parse_rapid(result)
-        if not text:
+        if not text or score < 0.8:
             result, _ = self._engine(array)
-            text, score = _parse_rapid(result)
+            detected_text, detected_score = _parse_rapid(result)
+            # Never promote conflicting text solely because its confidence is higher.
+            if not text or (detected_text.strip() == text.strip() and detected_score > score):
+                text, score = detected_text, detected_score
         return OcrResult(text.strip(), float(score))
 
     def recognize_block(self, image: Image.Image) -> OcrResult:  # pragma: no cover - real OCR
