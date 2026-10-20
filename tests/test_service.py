@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from sqlalchemy import select
 
-from synth import FakeDesktop, Harness, Scene, SBubble, SRow
+from synth import FakeDesktop, Harness, SBubble, Scene, SRow
 from test_email import FakeSMTP, factory
 from xianyu_monitor import state_keys
 from xianyu_monitor.capture.backends import CallableCapture
