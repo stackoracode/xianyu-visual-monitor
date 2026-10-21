@@ -125,7 +125,7 @@ def chat(seed: int, reference: Image.Image, width: int | None, resample, extra: 
         thumb = reference.resize((width, height), resample)
         x = left + pane_size[0] - width - rng.randrange(5, 40)
         # A thumbnail taller than the pane is matched by its centered 75% band, which must be visible.
-        y = top + rng.randrange(0, max(1, pane_size[1] - height)) if height < pane_size[1] else top - 60
+        y = top + rng.randrange(0, max(1, pane_size[1] - height)) if height < pane_size[1] else top - 20
         frame.paste(thumb, (x, y))
     return frame, (left, top, left + pane_size[0], top + pane_size[1])
 
@@ -147,7 +147,7 @@ CASES = [
 def test_fast_image_matcher_equals_exhaustive_search(seed, width, resample, distractor):
     from xianyu_monitor.vision import reply_image
 
-    size = (240, 320) if seed == 8 else (240, 180)
+    size = (240, 240) if seed == 8 else (240, 180)  # 300x300 thumbnail: taller than the pane
     ref = photo(seed, size)
     extra = photo(distractor) if distractor is not None else None
     frame, box = chat(seed, ref, width, resample, extra)
