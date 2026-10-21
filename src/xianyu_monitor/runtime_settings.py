@@ -61,6 +61,7 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("dry_run", "bool", True, "notifications"),
     SettingSpec("notifications_enabled", "bool", False, "notifications"),
     SettingSpec("alert_emails_enabled", "bool", True, "notifications"),
+    SettingSpec("reply_unverified_alert_emails_enabled", "bool", True, "notifications"),
     SettingSpec("email_language", "choice", "en", "notifications", choices=("en", "zh")),
     SettingSpec("email_max_attempts", "int", 5, "notifications", 1, 20),
     SettingSpec("email_retry_base_seconds", "int", 60, "notifications", 5, 86400),

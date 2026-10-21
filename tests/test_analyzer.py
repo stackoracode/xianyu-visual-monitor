@@ -90,6 +90,27 @@ async def test_challenge_prompt_is_detected():
     assert "安全验证" in obs.challenge_hits
 
 
+async def test_safety_ocr_reuses_only_identical_pixels_and_keywords():
+    h = Harness()
+    frame = h.render(Scene(rows=rows()))
+    assert await h.analyzer.check_screen(frame, RT) == "ok"
+    calls = h.fake.calls
+    assert await h.analyzer.check_screen(frame.copy(), RT) == "ok"
+    assert h.fake.calls == calls
+    challenge = h.render(Scene(rows=rows(), challenge="请完成安全验证"))
+    assert await h.analyzer.check_screen(challenge, RT) == "challenge"
+    calls = h.fake.calls
+    assert await h.analyzer.check_screen(challenge, RT) == "challenge"
+    assert h.fake.calls == calls  # cached positive must still block input
+    changed = RT.with_overrides(challenge_keywords=["different"])
+    assert await h.analyzer.check_screen(challenge, changed) == "ok"
+    assert h.fake.calls == calls + 1
+    h.analyzer.reset()
+    assert await h.analyzer.check_screen(challenge, RT) == "challenge"
+    assert h.fake.calls == calls + 2
+    assert await h.analyzer.check_screen(frame, RT) == "ok"
+
+
 async def test_blank_frame():
     h = Harness()
     from PIL import Image

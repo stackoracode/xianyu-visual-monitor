@@ -75,6 +75,13 @@ class RapidOcrEngine:
                 text, score = detected_text, detected_score
         return OcrResult(text.strip(), float(score))
 
+    def recognize_bubble(self, image: Image.Image) -> OcrResult:  # pragma: no cover - real OCR
+        lines = imageops.bubble_text_lines(image)
+        if not lines:
+            return self.recognize_block(image)
+        results = [self.recognize_line(line) for line in lines]
+        return OcrResult("\n".join(r.text for r in results), min(r.confidence for r in results))
+
     def recognize_block(self, image: Image.Image) -> OcrResult:  # pragma: no cover - real OCR
         import numpy as np  # type: ignore[import-not-found]
 

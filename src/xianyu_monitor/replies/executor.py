@@ -241,7 +241,7 @@ class ReplyExecutor:
     async def return_to_list(self, target: ReplyTarget, rt: RuntimeSettings, now=utcnow, before_leave=None) -> dict:
         """Leave a finished/cancelled action or an idle chat; preserve drafts and target changes."""
         frame = await self.capture()
-        obs = await self.analyzer.analyze(frame, now(), rt, force_full=True)
+        obs = await self.analyzer.analyze(frame, now(), rt)
         if obs.status != "ok":
             return {"returned": False, "reason": "screen_not_ready"}
         pane = await self.analyzer.analyze_pane(frame)

@@ -334,6 +334,7 @@
  "rules.trigger.keyword": "Keyword",
  "rules.trigger_type": "Trigger",
  "setting.alert_emails_enabled": "Send alert emails (challenges, pauses)",
+ "setting.reply_unverified_alert_emails_enabled": "Email unverified text-reply alerts (dashboard pause remains)",
  "setting.attachment_markers": "Attachment markers (force review)",
  "setting.avatar_conflict_distance": "Avatar conflict distance (bits)",
  "setting.avatar_match_distance": "Avatar match distance (bits)",

@@ -16,7 +16,7 @@ from PIL import Image
 
 from xianyu_monitor.detection.textnorm import normalize, parse_badge
 from xianyu_monitor.ocr.base import EMPTY, OcrResult
-from xianyu_monitor.ocr.pool import BLOCK_PREFIX, OcrPool
+from xianyu_monitor.ocr.pool import BLOCK_PREFIX, BUBBLE_PREFIX, OcrPool
 from xianyu_monitor.runtime_settings import RuntimeSettings
 from xianyu_monitor.vision import imageops
 from xianyu_monitor.vision.pane import find_bubbles, has_send_failure
@@ -101,6 +101,7 @@ class FrameAnalyzer:
         self._row_cache: OrderedDict[str, RowObservation] = OrderedDict()
         self._last: FrameObservation | None = None
         self.frame_counter = 0
+        self._challenge_cache = None
 
     def reset(self, profile: Profile | None = None) -> None:
         if profile is not None:
@@ -108,6 +109,7 @@ class FrameAnalyzer:
         self._prev_signature = None
         self._row_cache.clear()
         self._last = None
+        self._challenge_cache = None
 
     # ----- crops exactly as sent to OCR (also used by synthetic test fixtures) -----
     def field_crop(self, frame: Image.Image, index: int, field_name: str) -> Image.Image:
@@ -279,6 +281,9 @@ class FrameAnalyzer:
     async def _probe_challenge(self, frame: Image.Image, rt: RuntimeSettings) -> list[str]:
         assert self.profile.challenge_probe is not None
         region = imageops.crop(frame, self.profile.challenge_probe).convert("RGB")
+        key = (imageops.digest(region), tuple(rt.challenge_keywords))
+        if self._challenge_cache is not None and self._challenge_cache[0] == key:
+            return list(self._challenge_cache[1])
         result = (await self.ocr.recognize([(BLOCK_PREFIX + "probe", region)])).get(BLOCK_PREFIX + "probe", EMPTY)
         text = normalize(result.text).replace(" ", "")
         hits = []
@@ -286,6 +291,7 @@ class FrameAnalyzer:
             needle = normalize(keyword).replace(" ", "")
             if needle and needle in text:
                 hits.append(keyword)
+        self._challenge_cache = (key, tuple(hits))
         return hits
 
     async def check_screen(self, frame: Image.Image, rt: RuntimeSettings) -> str:
@@ -332,13 +338,13 @@ class FrameAnalyzer:
         if p.message_pane is not None:
             boxes = find_bubbles(frame, p.message_pane, p.colors, p.min_bubble_width, p.min_bubble_height)
             for i, bubble in enumerate(boxes):
-                requests.append((BLOCK_PREFIX + f"b{i}", self.bubble_text_crop(frame, bubble.box)))
+                requests.append((BUBBLE_PREFIX + f"b{i}", self.bubble_text_crop(frame, bubble.box)))
         results = await self.ocr.recognize(requests)
         title = results.get("title", EMPTY)
         composer = results.get(BLOCK_PREFIX + "composer", EMPTY)
         bubbles = []
         for i, bubble in enumerate(boxes):
-            res = results.get(BLOCK_PREFIX + f"b{i}", EMPTY)
+            res = results.get(BUBBLE_PREFIX + f"b{i}", EMPTY)
             bubbles.append(Bubble(bubble.direction, res.text.strip(), res.confidence, bubble.box))
         failed = any(b.direction == "outgoing" and has_send_failure(frame, b.box, p.message_pane, p.colors)
                      for b in boxes) if p.message_pane is not None else False

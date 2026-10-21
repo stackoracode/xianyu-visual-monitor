@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 _ENGINE: OcrEngine | None = None
 BLOCK_PREFIX = "block:"
+BUBBLE_PREFIX = "bubble:"
 
 
 def _init_worker(backend: str, lang: str) -> None:  # pragma: no cover - runs in child process
@@ -41,6 +42,8 @@ def _recognize_batch(items: list[tuple[str, bytes]]) -> dict[str, tuple[str, flo
 
 def _recognize_one(engine: OcrEngine, key: str, image: Image.Image) -> OcrResult:
     """Keys prefixed with ``block:`` request multi-line block OCR; others are single lines."""
+    if key.startswith(BUBBLE_PREFIX):
+        return getattr(engine, "recognize_bubble", engine.recognize_block)(image)
     if key.startswith(BLOCK_PREFIX):
         return engine.recognize_block(image)
     return engine.recognize_line(image)
