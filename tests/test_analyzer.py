@@ -103,7 +103,7 @@ async def test_safety_ocr_reuses_only_identical_pixels_and_keywords():
     assert await h.analyzer.check_screen(challenge, RT) == "challenge"
     assert h.fake.calls == calls  # cached positive must still block input
     changed = RT.with_overrides(challenge_keywords=["different"])
-    assert await h.analyzer.check_screen(challenge, changed) == "ok"
+    assert await h.analyzer.check_screen(challenge, changed) == "layout_mismatch"
     assert h.fake.calls == calls + 1
     h.analyzer.reset()
     assert await h.analyzer.check_screen(challenge, RT) == "challenge"
