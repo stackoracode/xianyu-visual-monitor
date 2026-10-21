@@ -31,11 +31,17 @@ class ImageDesktop(FakeDesktop):
         self.failure_icon = False
         self.baseline_image = False
         self.elapsed = 0.
+        self.upload_delay = 0.
+        self.upload_ready_at = None
 
     async def sleep(self, seconds):
         self.elapsed += seconds
 
     def capture(self):
+        if self.upload_ready_at is not None and self.elapsed >= self.upload_ready_at:
+            self.image_sent = True
+            self.rows[0].preview = '[图片]'
+            self.upload_ready_at = None
         if self.dialog:
             frame = Image.new('RGB', (1280, 720), (170, 170, 170))
             draw = ImageDraw.Draw(frame)
@@ -74,8 +80,10 @@ class ImageDesktop(FakeDesktop):
             elif key == 'Return':
                 self.dialog = False
                 if not self.drop_upload:
-                    self.image_sent = True
-                    if not self.no_preview_update:
+                    self.image_sent = not self.upload_delay
+                    if self.upload_delay:
+                        self.upload_ready_at = self.elapsed + self.upload_delay
+                    elif not self.no_preview_update:
                         self.rows[0].preview = '[图片]'
                     if self.wrong_target:
                         self.selected = 1
@@ -129,6 +137,24 @@ async def test_text_precedes_image_and_f5_is_last(tmp_path):
     assert (await executor.return_to_list(target, RT))['returned']
     assert desk.actions[-1] == ('press', 'F5') and desk.selected is None
     assert 'image_submitting' in phases
+
+
+async def test_slow_upload_waits_without_selecting_file_twice(tmp_path):
+    desk = ImageDesktop()
+    executor, target, phase, _ = await verified_text(desk)
+    desk.upload_delay = 55.
+    rt = RuntimeSettings({'reply_step_delay_seconds': 10., 'reply_image_timeout_seconds': 180.,
+                          'reply_image_verify_seconds': 5.})
+
+    async def remember(digest):
+        pass
+
+    image = await ImageReplyExecutor(executor, desk.matcher).execute(
+        target, str(make_asset(tmp_path)), rt, phase, remember)
+    assert image.status == 'sent_verified' and image.submitted
+    assert desk.elapsed >= 55.
+    assert sum(a[0] == 'click_image' for a in desk.actions) == 1
+    assert desk.actions.count(('dialog_key', 'Return')) == 1
 
 
 @pytest.mark.parametrize('flag,reason', [('drop_upload', 'image_not_confirmed_within_timeout'),

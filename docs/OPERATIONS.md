@@ -105,6 +105,10 @@ thumbnail plus the conversation's image preview. A thumbnail must be new relativ
 to the pre-upload frame, right-aligned, and match the private reference in structure
 and color; visible failure indicators prevent success. Stable evidence is observed
 for `reply_image_verify_seconds`, within `reply_image_timeout_seconds`.
+The image timeout defaults to 180 seconds (configurable from 5 to 600). Uploads
+can remain invisible for more than a minute. A timeout or a recipient saying
+"not received yet" is not proof that an upload failed: do not select the file again.
+Leave uncertain attempts paused and inspect for delayed delivery first.
 
 Text status and image status are separate on the Replies page. An image failure or
 uncertain upload never demotes verified text or automatically repeats it. A crash
