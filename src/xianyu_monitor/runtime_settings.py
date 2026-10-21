@@ -73,7 +73,7 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("reply_refresh_timeout_seconds", "float", 20.0, "replies", 1.0, 60.0),
     SettingSpec("reply_default_image_path", "str", "", "replies"),
     SettingSpec("reply_image_send_enabled", "bool", False, "replies"),
-    SettingSpec("reply_image_timeout_seconds", "float", 45.0, "replies", 5.0, 180.0),
+    SettingSpec("reply_image_timeout_seconds", "float", 180.0, "replies", 5.0, 600.0),
     SettingSpec("reply_image_verify_seconds", "float", 5.0, "replies", 1.0, 30.0),
     SettingSpec("reply_step_delay_seconds", "float", 1.0, "replies", 0.1, 10.0),
     SettingSpec("reply_global_min_interval_seconds", "int", 30, "replies", 0, 86400),
