@@ -100,7 +100,8 @@ a reply action are discarded as `superseded` rather than rolling back customer s
 ## Text followed by an image
 
 Text is sent and durably verified first. Only then does the image part open the
-calibrated file chooser, verify the complete path, submit it, and wait for an outgoing
+calibrated file chooser, verify the complete path and the Open button, click that
+button once, and wait for an outgoing
 thumbnail plus the conversation's image preview. A thumbnail must be new relative
 to the pre-upload frame, right-aligned, and match the private reference in structure
 and color; visible failure indicators prevent success. Stable evidence is observed
@@ -109,6 +110,12 @@ The image timeout defaults to 180 seconds (configurable from 5 to 600). Uploads
 can remain invisible for more than a minute. A timeout or a recipient saying
 "not received yet" is not proof that an upload failed: do not select the file again.
 Leave uncertain attempts paused and inspect for delayed delivery first.
+On the board, pressing Return in GTK's location entry can close the chooser with
+a browser cancel event. Closing the chooser alone does not prove file selection.
+Profiles must calibrate `image_dialog_confirm` and `image_dialog_confirm_click`;
+the worker requires OCR of Open/打开 before committing. It never falls back to Return.
+Image outcomes include verification check counts and the last evidence flags, so
+missing previews and missing thumbnail matches can be distinguished in diagnostics.
 
 Text status and image status are separate on the Replies page. An image failure or
 uncertain upload never demotes verified text or automatically repeats it. A crash

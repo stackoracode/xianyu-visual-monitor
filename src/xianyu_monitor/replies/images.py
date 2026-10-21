@@ -32,6 +32,7 @@ class ImageReplyExecutor:
         crops = [(BLOCK_PREFIX + "image_dialog", frame.crop(profile.image_dialog_title))]
         if path is not None:
             crops.append((BLOCK_PREFIX + "image_path", frame.crop(profile.image_dialog_path)))
+            crops.append((BLOCK_PREFIX + "image_confirm", frame.crop(profile.image_dialog_confirm)))
         result = await self.text.analyzer.ocr.recognize(crops)
         title = result[BLOCK_PREFIX + "image_dialog"]
         good = title.confidence >= float(rt.ocr_min_confidence) and any(
@@ -43,12 +44,16 @@ class ImageReplyExecutor:
             good = good and entry.confidence >= float(rt.ocr_min_confidence) and entry.text.strip() in {
                 str(path), str(path) + "|"
             }
+            button = result[BLOCK_PREFIX + "image_confirm"]
+            good = good and button.confidence >= float(rt.ocr_min_confidence) and normalize_name(button.text) in {
+                "open", "打开"
+            }
         return good
 
     async def execute(self, target, path, rt, set_phase, remember_asset, expected_sha256=None, on_observation=None):
         text, profile = self.text, self.text.analyzer.profile
         if not all([profile.image_attach_click, profile.image_dialog_title, profile.image_dialog_path,
-                    profile.message_pane]):
+                    profile.image_dialog_confirm, profile.image_dialog_confirm_click, profile.message_pane]):
             return ImageOutcome("failed", "image_controls_not_calibrated")
         try:
             asset = load_asset(path or "", expected_sha256)
@@ -89,17 +94,26 @@ class ImageReplyExecutor:
             load_asset(str(asset.path), asset.sha256)  # no file replacement before irreversible selection
             if not await set_phase("image_submitting"):
                 return ImageOutcome("uncertain", "image_lease_lost", pause_replies=True)
-            await text.input.press("Return")
+            # On the board GTK Return can close the chooser with a cancel event.
+            # Only click the screenshot-verified Open button, once.
+            await text.input.click(*profile.image_dialog_confirm_click)
             submitted = True
             dialog_open = False
-            deadline = text.monotonic() + float(rt.reply_image_timeout_seconds)
+            started = text.monotonic()
+            deadline = started + float(rt.reply_image_timeout_seconds)
             verified_since = None
+            checks, last = 0, {}
+            def evidence():
+                return {"selection_method": "verified_open_button", "verification_checks": checks,
+                        "elapsed_seconds": round(text.monotonic() - started, 2), "last_observation": last}
             while True:
                 if not await set_phase("image_verifying"):
                     return ImageOutcome("uncertain", "image_lease_lost", submitted=True, pause_replies=True)
                 await text.sleep(max(.2, float(rt.reply_step_delay_seconds)))
                 frame = await text.capture()
                 obs = await text.analyzer.analyze(frame, utcnow(), rt)
+                checks += 1
+                last = {"screen_status": obs.status}
                 if obs.status not in {"ok", "unchanged"}:
                     if text.monotonic() >= deadline:
                         break
@@ -116,6 +130,9 @@ class ImageReplyExecutor:
                 if match and has_send_failure(frame, match.box, profile.message_pane, profile.colors):
                     return ImageOutcome("uncertain", "image_send_failure_indicator", submitted=True, pause_replies=True)
                 novel = match and (baseline is None or match.box != baseline.box)
+                last.update({"title_verified": True, "preview_is_image": preview_ok,
+                             "image_matches": bool(match), "novel_image": bool(novel),
+                             "match_score": round(match.score, 4) if match else None})
                 if preview_ok and novel:
                     verified_since = verified_since if verified_since is not None else text.monotonic()
                 elif not novel:
@@ -123,10 +140,12 @@ class ImageReplyExecutor:
                 # A later incoming preview must not erase previously observed image evidence.
                 if verified_since is not None and novel and text.monotonic() - verified_since >= float(rt.reply_image_verify_seconds):
                     return ImageOutcome("sent_verified", "outgoing_image_matches_no_failure_observed", submitted=True,
-                                        details={"match_score": round(match.score, 4), "sha256": asset.sha256})
+                                        details={"match_score": round(match.score, 4), "sha256": asset.sha256,
+                                                 **evidence()})
                 if text.monotonic() >= deadline:
                     break
-            return ImageOutcome("uncertain", "image_not_confirmed_within_timeout", submitted=True, pause_replies=True)
+            return ImageOutcome("uncertain", "image_not_confirmed_within_timeout", submitted=True,
+                                pause_replies=True, details=evidence())
         except (InputError, OSError, ValueError) as exc:
             return ImageOutcome("uncertain" if submitted else "failed", "image_input_or_file_error",
                                 submitted=submitted, pause_replies=submitted, details={"error_type": type(exc).__name__})

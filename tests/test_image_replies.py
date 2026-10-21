@@ -18,13 +18,16 @@ RT = RuntimeSettings({'reply_step_delay_seconds': .1, 'reply_verify_timeout_seco
 class ImageDesktop(FakeDesktop):
     def __init__(self):
         h = Harness({'image_attach_click': (480, 545), 'image_dialog_title': (490, 30, 800, 56),
-                     'image_dialog_path': (280, 62, 1196, 92)})
+                     'image_dialog_path': (280, 62, 1196, 92),
+                     'image_dialog_confirm': (1104, 674, 1196, 705),
+                     'image_dialog_confirm_click': (1148, 689)})
         super().__init__(h, [SRow('买家甲', '你好', '刚刚', badge=1, avatar=1), SRow('买家乙', '旧消息', avatar=2)],
                          {'买家甲': [SBubble('incoming', '你好')], '买家乙': []})
         self.dialog = False
         self.path = ''
         self.image_sent = False
         self.bad_path = False
+        self.bad_button = False
         self.drop_upload = False
         self.no_preview_update = False
         self.wrong_target = False
@@ -47,6 +50,9 @@ class ImageDesktop(FakeDesktop):
             draw = ImageDraw.Draw(frame)
             draw.text((510, 36), 'Open Files', fill='black')
             self.h.fake.register(frame.crop(self.h.profile.image_dialog_title), 'Open Files', .99)
+            draw.text((1125, 680), 'Open', fill='black')
+            self.h.fake.register(frame.crop(self.h.profile.image_dialog_confirm),
+                                 'Cancel' if self.bad_button else 'Open', .99)
             if self.path:
                 draw.text((285, 70), self.path, fill='black')
                 self.h.fake.register(frame.crop(self.h.profile.image_dialog_path),
@@ -62,6 +68,17 @@ class ImageDesktop(FakeDesktop):
         if (x, y) == self.h.profile.image_attach_click:
             self.actions.append(('click_image', x, y))
             self.dialog = True
+        elif self.dialog and (x, y) == self.h.profile.image_dialog_confirm_click:
+            self.actions.append(('open_file',))
+            self.dialog = False
+            if not self.drop_upload:
+                self.image_sent = not self.upload_delay
+                if self.upload_delay:
+                    self.upload_ready_at = self.elapsed + self.upload_delay
+                elif not self.no_preview_update:
+                    self.rows[0].preview = '[图片]'
+                if self.wrong_target:
+                    self.selected = 1
         else:
             await super().click(x, y)
 
@@ -78,15 +95,8 @@ class ImageDesktop(FakeDesktop):
             if key == 'Escape':
                 self.dialog = False
             elif key == 'Return':
+                # Real board reproducer: Return cancels, even with a valid path.
                 self.dialog = False
-                if not self.drop_upload:
-                    self.image_sent = not self.upload_delay
-                    if self.upload_delay:
-                        self.upload_ready_at = self.elapsed + self.upload_delay
-                    elif not self.no_preview_update:
-                        self.rows[0].preview = '[图片]'
-                    if self.wrong_target:
-                        self.selected = 1
         else:
             await super().press(key)
 
@@ -137,6 +147,8 @@ async def test_text_precedes_image_and_f5_is_last(tmp_path):
     assert (await executor.return_to_list(target, RT))['returned']
     assert desk.actions[-1] == ('press', 'F5') and desk.selected is None
     assert 'image_submitting' in phases
+    assert desk.actions.count(('open_file',)) == 1
+    assert ('dialog_key', 'Return') not in desk.actions
 
 
 async def test_slow_upload_waits_without_selecting_file_twice(tmp_path):
@@ -154,7 +166,8 @@ async def test_slow_upload_waits_without_selecting_file_twice(tmp_path):
     assert image.status == 'sent_verified' and image.submitted
     assert desk.elapsed >= 55.
     assert sum(a[0] == 'click_image' for a in desk.actions) == 1
-    assert desk.actions.count(('dialog_key', 'Return')) == 1
+    assert desk.actions.count(('open_file',)) == 1
+    assert ('dialog_key', 'Return') not in desk.actions
 
 
 @pytest.mark.parametrize('flag,reason', [('drop_upload', 'image_not_confirmed_within_timeout'),
@@ -174,7 +187,8 @@ async def test_image_failure_never_repeats_text(tmp_path, flag, reason):
     assert result.status == 'uncertain' and result.reason == reason and result.pause_replies
     assert desk.actions.count(('type', target.reply_text)) == 1
     assert desk.actions.count(('press', 'Return')) == 1
-    assert desk.actions.count(('dialog_key', 'Return')) == 1
+    assert desk.actions.count(('open_file',)) == 1
+    assert ('dialog_key', 'Return') not in desk.actions
 
 
 async def test_wrong_file_path_cancels_before_submission(tmp_path):
@@ -188,6 +202,21 @@ async def test_wrong_file_path_cancels_before_submission(tmp_path):
     result = await ImageReplyExecutor(executor, desk.matcher).execute(target, str(make_asset(tmp_path)), RT, phase, remember)
     assert result.status == 'failed' and not result.submitted
     assert ('dialog_key', 'Return') not in desk.actions and not desk.dialog
+    assert ('open_file',) not in desk.actions
+
+
+async def test_wrong_confirm_button_cancels_without_committing(tmp_path):
+    desk = ImageDesktop()
+    executor, target, phase, _ = await verified_text(desk)
+    desk.bad_button = True
+
+    async def remember(_):
+        pass
+
+    result = await ImageReplyExecutor(executor, desk.matcher).execute(
+        target, str(make_asset(tmp_path)), RT, phase, remember)
+    assert result.status == 'failed' and not result.submitted
+    assert ('open_file',) not in desk.actions and not desk.dialog
 
 
 async def test_new_input_before_image_cancels_stale_attachment(tmp_path):

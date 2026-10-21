@@ -4,6 +4,7 @@ Verifies that the production capture backend (scrot) and input adapter (xdotool/
 work against a 1280x720, 16-bit display like the board's Xvnc. It does not touch any browser.
 """
 
+import asyncio
 import os
 
 import pytest
@@ -26,6 +27,8 @@ async def test_scrot_capture_of_existing_display(tmp_path):
 async def test_xdotool_input_commands_run():
     adapter = XdotoolInput(x_env(discover(DISPLAY)), text_method="clipboard")
     await adapter.click(10, 10)
+    # Pointer already here: --sync would wait forever for a motion event.
+    await asyncio.wait_for(adapter.click(10, 10), timeout=2)
     await adapter.type_text("REF-TEST 测试")
     await adapter.press("Escape")
     typing = XdotoolInput(x_env(discover(DISPLAY)), text_method="xdotool_type")

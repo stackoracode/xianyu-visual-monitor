@@ -56,7 +56,9 @@ class XdotoolInput:
             raise InputError(f"{args[0]} failed (exit {proc.returncode}): {detail}")
 
     async def click(self, x: int, y: int) -> None:
-        await self._run("xdotool", "mousemove", "--sync", str(int(x)), str(int(y)), "click", "1")
+        # --sync waits for a motion event, which never arrives if the pointer is
+        # already at this position. X requests stay ordered without that wait.
+        await self._run("xdotool", "mousemove", str(int(x)), str(int(y)), "click", "1")
 
     async def type_text(self, text: str) -> None:
         if self.text_method == "clipboard":
