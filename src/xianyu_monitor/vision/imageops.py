@@ -25,6 +25,30 @@ def digest(image: Image.Image) -> str:
     return h.hexdigest()
 
 
+def bubble_text_lines(image: Image.Image) -> list[Image.Image]:
+    """Locate dark text rows on a light bubble; return no crops when ambiguous."""
+    gray = image.convert("L")
+    histogram = gray.histogram()
+    background = max(range(256), key=histogram.__getitem__)
+    if background < 170:
+        return []
+    px = gray.load()
+    rows = [y for y in range(gray.height) if any(px[x, y] < background - 40 for x in range(gray.width))]
+    groups: list[list[int]] = []
+    for y in rows:
+        if not groups or y - groups[-1][-1] > 3:
+            groups.append([])
+        groups[-1].append(y)
+    if not groups or any(g[-1] - g[0] < 5 for g in groups):
+        return []  # punctuation-only/fragmented rows need ordinary block OCR
+    out = []
+    for group in groups:
+        xs = [x for y in group for x in range(gray.width) if px[x, y] < background - 40]
+        out.append(image.crop((max(0, min(xs) - 3), max(0, group[0] - 3),
+                               min(gray.width, max(xs) + 4), min(gray.height, group[-1] + 4))))
+    return out
+
+
 def dhash(image: Image.Image, size: int = 8) -> str:
     """Difference hash; robust to tiny rendering noise. Returns 16 hex chars for size=8."""
     gray = image.convert("L").resize((size + 1, size), Image.Resampling.LANCZOS)

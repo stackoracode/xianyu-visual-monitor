@@ -270,6 +270,17 @@ async def test_f5_preserves_owner_draft():
     assert desk.actions == before
 
 
+async def test_f5_leaves_already_analyzed_unchanged_chat():
+    desk, executor, target, set_phase, _ = setup()
+    assert (await executor.execute(target, RT, set_phase)).status == "sent_verified"
+    from xianyu_monitor.timeutil import utcnow
+
+    await executor.analyzer.analyze(await desk.capture_async(), utcnow(), RT, force_full=True)
+    result = await executor.return_to_list(target, RT)
+    assert result["returned"] and desk.selected is None
+    assert desk.actions.count(("press", "Return")) == 1
+
+
 async def test_f5_timeout_is_return_failure_not_send_failure():
     desk, executor, target, set_phase, _ = setup()
     assert (await executor.execute(target, RT, set_phase)).status == "sent_verified"

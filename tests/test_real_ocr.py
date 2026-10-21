@@ -77,7 +77,8 @@ async def test_real_ocr_reads_synthetic_rows(backend):
 
 
 @pytest.mark.parametrize("backend", BACKENDS or ["none"])
-async def test_real_ocr_reads_every_wrapped_reply_line(backend):
+@pytest.mark.parametrize("mode", ["block", "bubble"])
+async def test_real_ocr_reads_every_wrapped_reply_line(backend, mode):
     if backend == "none":
         pytest.skip("no OCR backend installed")
     font = cjk_font()
@@ -90,7 +91,7 @@ async def test_real_ocr_reads_every_wrapped_reply_line(backend):
         draw.text((12, 10 + index * 27), text, font=font, fill=(20, 20, 20))
     pool = OcrPool(backend, use_processes=False)
     try:
-        result = (await pool.recognize([("block:wrapped", image)]))["block:wrapped"]
+        result = (await pool.recognize([(mode + ":wrapped", image)]))[mode + ":wrapped"]
     finally:
         pool.close()
     actual = normalize(result.text).replace(" ", "")

@@ -334,6 +334,7 @@
  "rules.trigger.keyword": "关键词",
  "rules.trigger_type": "触发场景",
  "setting.alert_emails_enabled": "发送告警邮件（验证、暂停）",
+ "setting.reply_unverified_alert_emails_enabled": "发送文字回复未核实告警邮件（关闭后仍在后台暂停提示）",
  "setting.attachment_markers": "附件标记（强制审核）",
  "setting.avatar_conflict_distance": "头像冲突距离（位）",
  "setting.avatar_match_distance": "头像匹配距离（位）",

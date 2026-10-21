@@ -131,6 +131,38 @@ async def test_challenge_pauses_replies_and_alerts_once(db, settings):
     await service.release_lease()
 
 
+@pytest.mark.parametrize("email_enabled", [False, True])
+async def test_unverified_reply_email_policy_keeps_pause_and_critical_alerts(db, settings, email_enabled):
+    from xianyu_monitor.replies.executor import ReplyOutcome
+
+    h = Harness()
+    await configure(db, h, monitor_mode="active", reply_mode="auto", reply_send_enabled=True,
+                    dry_run=False, reply_unverified_alert_emails_enabled=email_enabled)
+    await add_burst_rules(db)
+    rows = [SRow("买家甲", "hello", "10-11", avatar=1)]
+    desk = FakeDesktop(h, rows, {"买家甲": [SBubble("incoming", "hello")]})
+    service = make_service(settings, db, h, desk.capture, input_factory=lambda: desk)
+    await service.start(use_file_lock=False)
+    await service.handle_frame(await service.capture_backend.capture())
+    rows[0].preview, rows[0].badge = "还在吗", 1
+    desk.history["买家甲"].append(SBubble("incoming", "还在吗"))
+    await service.handle_frame(await service.capture_backend.capture())
+    (job,) = await service.jobs.claim(["reply"], limit=1)
+    await service._finish_reply(job, job.payload["intent_id"], ReplyOutcome(
+        "sent_unverified", "send_not_confirmed_within_timeout", pause_replies=True,
+        clicked=True, typed=True, submitted=True))
+    async with db.session() as s:
+        alerts = (await s.execute(select(Job).where(Job.dedup_key.like("alert:%")))).scalars().all()
+        assert len(alerts) == int(email_enabled)
+        assert (await get_state(s, state_keys.REPLY_PAUSE))["paused"]
+        assert (await s.get(Job, job.id)).status == "uncertain"
+    await service.pause_replies("capture_failed", "desktop unavailable")
+    async with db.session() as s:
+        alerts = (await s.execute(select(Job).where(Job.dedup_key.like("alert:capture_failed:%")))).scalars().all()
+        assert len(alerts) == 1
+    await service.release_lease()
+
+
 async def test_capture_failures_pause_replies(db, settings):
     h = Harness()
     await configure(db, h, capture_failure_pause_after=2)

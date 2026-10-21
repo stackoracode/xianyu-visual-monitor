@@ -241,16 +241,17 @@ class ReplyExecutor:
     async def return_to_list(self, target: ReplyTarget, rt: RuntimeSettings, now=utcnow, before_leave=None) -> dict:
         """Leave a finished/cancelled action or an idle chat; preserve drafts and target changes."""
         frame = await self.capture()
-        obs = await self.analyzer.analyze(frame, now(), rt, force_full=True)
-        if obs.status != "ok":
+        obs = await self.analyzer.analyze(frame, now(), rt)
+        if obs.status not in {"ok", "unchanged"}:
             return {"returned": False, "reason": "screen_not_ready"}
         pane = await self.analyzer.analyze_pane(frame)
-        if (not self._title_matches(pane, target, rt) or not self._composer_empty(pane)
-                or pane.composer_conf < float(rt.ocr_min_confidence)):
+        if not self._title_matches(pane, target, rt):
             return {"returned": False, "reason": "owner_changed_target_or_draft_present"}
         if before_leave is not None:
             obs.pane = pane
             await before_leave(frame, obs)
+        if (not self._composer_empty(pane) or pane.composer_conf < float(rt.ocr_min_confidence)):
+            return {"returned": False, "reason": "owner_changed_target_or_draft_present"}
         try:
             await self.input.press("F5")
         except InputError:

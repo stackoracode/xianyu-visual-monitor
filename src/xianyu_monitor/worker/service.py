@@ -685,8 +685,8 @@ class MonitorService:
                     await self.pause_replies(f"reply_{image.reason}"[:64], f"intent {intent_id}")
             if outcome.clicked:
                 try:
-                    # Persist a newer incoming message BEFORE leaving the pane that proves its direction.
-                    await self._handle_frame_locked(await self.capture_backend.capture(), force_full=True)
+                    # before_leave persists fresh incoming evidence before F5; avoid a duplicate
+                    # full-list scan here while the selected conversation auto-reads arrivals.
                     async def before_leave(frame, obs):
                         image_path = self._save_frame(frame, obs.captured_at, rt, obs)
                         result = await self.processor.process(obs, rt, image_path=image_path)
@@ -696,7 +696,7 @@ class MonitorService:
 
                     returned = await executor.return_to_list(target, rt, before_leave=before_leave)
                     if returned.get("returned"):
-                        await self._handle_frame_locked(await self.capture_backend.capture(), force_full=True)
+                        await self._handle_frame_locked(await self.capture_backend.capture())
                     details["return_to_list"] = returned
                     async with self.db.transaction() as session:
                         row = await session.get(ReplyIntent, intent_id)
@@ -743,7 +743,9 @@ class MonitorService:
             else:
                 await self.jobs.succeed(job, details)
         if outcome.pause_replies:
-            await self.pause_replies(f"reply_{outcome.reason}"[:64], f"intent {intent_id}")
+            rt = await self.runtime()
+            alert = outcome.status != "sent_unverified" or rt.reply_unverified_alert_emails_enabled
+            await self.pause_replies(f"reply_{outcome.reason}"[:64], f"intent {intent_id}", alert=alert)
         if outcome.status != "sent_verified":
             async with self.db.transaction() as session:
                 row = await session.get(ReplyIntent, intent_id)
