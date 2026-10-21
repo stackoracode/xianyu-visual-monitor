@@ -2,10 +2,12 @@
 
 import datetime as dt
 
+import pytest
 from sqlalchemy import func, select
 
 from synth import Harness, Scene, SRow
 from xianyu_monitor.models import Customer, Job, KeywordRule, MessageEvent, ReplyIntent, ReviewItem
+from xianyu_monitor.replies.planner import enqueue_reply_job
 from xianyu_monitor.runtime_settings import RuntimeSettings
 from xianyu_monitor.timeutil import utcnow
 from xianyu_monitor.worker.pipeline import FrameProcessor
@@ -208,7 +210,12 @@ async def test_reply_cooldown_skips_second_auto_reply(db, rt):
     auto = rt.with_overrides(reply_mode="auto", reply_send_enabled=True)
     rows = baseline_rows()
     rows[0].badge, rows[0].preview = 2, "还在吗"
-    await run(h, proc, Scene(rows=rows), auto, 30)
+    first = await run(h, proc, Scene(rows=rows), auto, 30)
+    async with db.transaction() as s:
+        sent = await s.get(ReplyIntent, first.intents[0])
+        sent.status, sent.sent_at = "sent_verified", utcnow()
+        job = await s.get(Job, sent.job_id)
+        job.status = "succeeded"
     rows[0].badge, rows[0].preview = 3, "还在吗?"
     second = await run(h, proc, Scene(rows=rows), auto, 40)
     async with db.session() as s:
@@ -230,3 +237,78 @@ async def test_baseline_mode_does_not_plan_replies_or_emails_for_new_names(db):
                           "reply_send_enabled": True})
     result = await run(h, proc, Scene(rows=[SRow("x", "还在吗", badge=1)]), rt)
     assert result.jobs == [] and result.intents == [] and result.events == []
+
+
+@pytest.mark.parametrize("phase", ["queued", "recovered", "targeting"])
+async def test_newer_incoming_coalesces_pending_reply_even_when_new_text_has_no_rule(db, rt, phase):
+    await add_rule(db)
+    h, proc = await seeded(db, rt)
+    auto = rt.with_overrides(reply_mode="auto", reply_send_enabled=True)
+    rows = baseline_rows()
+    rows[0].badge, rows[0].preview = 2, "还在吗"
+    first = await run(h, proc, Scene(rows=rows), auto, 30)
+    async with db.transaction() as s:
+        old = await s.get(ReplyIntent, first.intents[0])
+        job = await s.get(Job, old.job_id)
+        job.phase = phase
+        if phase == "targeting":
+            job.status, old.status = "leased", "sending"
+    rows[0].badge, rows[0].preview = 3, "不同的问题"
+    latest = await run(h, proc, Scene(rows=rows), auto, 40)
+    assert not latest.intents
+    async with db.session() as s:
+        old = await s.get(ReplyIntent, first.intents[0])
+        assert old.status == "superseded"
+        assert (await s.get(Job, old.job_id)).status == "cancelled"
+
+
+async def test_burst_replaces_queued_reply_and_does_not_consume_sent_cooldown(db, rt):
+    await add_rule(db)
+    h, proc = await seeded(db, rt)
+    auto = rt.with_overrides(reply_mode="auto", reply_send_enabled=True)
+    rows = baseline_rows()
+    rows[0].badge, rows[0].preview = 2, "还在吗"
+    first = await run(h, proc, Scene(rows=rows), auto, 30)
+    rows[0].badge, rows[0].preview = 3, "请问还在吗"
+    latest = await run(h, proc, Scene(rows=rows), auto, 40)
+    async with db.session() as s:
+        assert (await s.get(ReplyIntent, first.intents[0])).status == "superseded"
+        assert (await s.get(ReplyIntent, latest.intents[0])).status == "queued"
+
+
+async def test_burst_never_cancels_reply_after_typing_phase(db, rt):
+    await add_rule(db)
+    h, proc = await seeded(db, rt)
+    auto = rt.with_overrides(reply_mode="auto", reply_send_enabled=True)
+    rows = baseline_rows()
+    rows[0].badge, rows[0].preview = 2, "还在吗"
+    first = await run(h, proc, Scene(rows=rows), auto, 30)
+    async with db.transaction() as s:
+        old = await s.get(ReplyIntent, first.intents[0])
+        job = await s.get(Job, old.job_id)
+        old.status, job.status, job.phase = "sending", "leased", "typing"
+    rows[0].badge, rows[0].preview = 3, "不同的问题"
+    await run(h, proc, Scene(rows=rows), auto, 40)
+    async with db.session() as s:
+        old = await s.get(ReplyIntent, first.intents[0])
+        assert old.status == "sending" and (await s.get(Job, old.job_id)).status == "leased"
+
+
+async def test_debounce_and_safe_review_reapproval_create_a_fresh_job(db, rt):
+    await add_rule(db)
+    h, proc = await seeded(db, rt)
+    auto = rt.with_overrides(reply_mode="auto", reply_send_enabled=True, reply_debounce_seconds=3)
+    rows = baseline_rows()
+    rows[0].badge, rows[0].preview = 2, "还在吗"
+    first = await run(h, proc, Scene(rows=rows), auto, 30)
+    async with db.transaction() as s:
+        intent = await s.get(ReplyIntent, first.intents[0])
+        job = await s.get(Job, intent.job_id)
+        assert (job.available_at - job.created_at).total_seconds() >= 2.9
+        previous_id = job.id
+        job.status, job.result = "succeeded", {"typed": False, "returned_to_review": True}
+        intent.status = "review"
+        await s.flush()
+        await enqueue_reply_job(s, intent)
+        assert intent.job_id != previous_id and intent.status == "queued"
+        assert (await s.get(Job, intent.job_id)).status == "pending"

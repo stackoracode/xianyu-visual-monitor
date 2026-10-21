@@ -9,6 +9,7 @@ duplicate events, notifications or replies.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
@@ -19,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from xianyu_monitor import state_keys
 from xianyu_monitor.db import Database, get_state, set_state
 from xianyu_monitor.detection.identity import CustomerDirectory, DirectoryEntry, MatchOutcome, match_row
-from xianyu_monitor.detection.textnorm import normalize_name
+from xianyu_monitor.detection.textnorm import normalize, normalize_name
 from xianyu_monitor.detection.timeparse import is_recent, parse_relative
 from xianyu_monitor.detection.tracker import RowState, Transition, observe
 from xianyu_monitor.models import (
@@ -38,6 +39,7 @@ from xianyu_monitor.replies.planner import load_rules, plan_reply
 from xianyu_monitor.runtime_settings import RuntimeSettings
 from xianyu_monitor.timeutil import iso, utcnow
 from xianyu_monitor.vision.analyzer import FrameObservation, RowObservation
+from xianyu_monitor.vision.pane import canonical_title
 
 log = logging.getLogger(__name__)
 MAX_AVATARS_PER_CUSTOMER = 5
@@ -126,6 +128,28 @@ class FrameProcessor:
     def __init__(self, db: Database, worker_name: str):
         self.db = db
         self.worker_name = worker_name
+
+    async def _pane_evidence(self, session, obs, row, customer, rt):
+        """Persist only title-bound, confident pane evidence; first samples aren't messages."""
+        pane = obs.pane
+        if (not row.selected or sum(r.selected for r in obs.rows) != 1 or pane is None
+                or pane.title_conf < float(rt.ocr_min_confidence) or pane.send_failure):
+            return None, False, False
+        aliases = set((await session.execute(select(CustomerAlias.alias_norm).where(
+            CustomerAlias.customer_id == customer.id))).scalars())
+        if canonical_title(pane.title) not in aliases:
+            return None, False, False
+        last = pane.last_bubble
+        if last is None or last.confidence < float(rt.ocr_min_confidence) or last.direction == "unknown":
+            return None, False, False
+        key = f"pane_evidence:{customer.id}"
+        previous = await get_state(session, key)
+        digest = hashlib.sha256(json.dumps([last.direction, normalize(last.text), last.box,
+                                           len(pane.bubbles)], ensure_ascii=False).encode()).hexdigest()
+        await set_state(session, key, {"digest": digest})
+        concordant = (row.preview_conf >= float(rt.ocr_min_confidence)
+                      and normalize(row.preview).replace(" ", "") == normalize(last.text).replace(" ", ""))
+        return last.direction, bool(previous.get("digest") and previous["digest"] != digest and concordant), concordant
 
     async def record_frame(self, session: AsyncSession, obs: FrameObservation, capture_ms: float,
                            image_path: str | None) -> Frame:
@@ -240,11 +264,13 @@ class FrameProcessor:
         if outcome.kind == "new":
             if rt.monitor_mode == "baseline":
                 customer = await self._create_customer(session, row, "baseline", directory, now)
+                await self._pane_evidence(session, obs, row, customer, rt)
                 transition = observe(None, row, now, rt, customer.id)
                 transition.kind = None  # baseline seeding never produces events
                 await self._record_transition(session, customer, row, transition, frame_id, obs, None)
                 return
             customer = await self._create_customer(session, row, "new", directory, now)
+            await self._pane_evidence(session, obs, row, customer, rt)
             result.new_customers.append(customer.id)
             transition = observe(None, row, now, rt, customer.id, pane_direction)
             event = await self._record_transition(session, customer, row, transition, frame_id, obs, None)
@@ -274,10 +300,14 @@ class FrameProcessor:
         customer = await session.get(Customer, outcome.customer_id)
         if customer is None:
             return
+        state_row = await session.get(ConversationState, customer.id)
+        if state_row is not None and now < state_row.observed_at:
+            return  # late queued screenshots cannot rewind persisted conversation state
         customer.last_observed_at = now
         await self._maybe_add_avatar(session, customer.id, row, directory)
-        state_row = await session.get(ConversationState, customer.id)
-        transition = observe(state_from_row(state_row), row, now, rt, customer.id, pane_direction)
+        verified_direction, pane_changed, pane_verified = await self._pane_evidence(session, obs, row, customer, rt)
+        transition = observe(state_from_row(state_row), row, now, rt, customer.id,
+                             verified_direction or pane_direction, pane_changed, pane_verified)
         event = await self._record_transition(session, customer, row, transition, frame_id, obs, state_row)
         if event is None:
             return

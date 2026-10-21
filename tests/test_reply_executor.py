@@ -45,6 +45,26 @@ async def test_verified_send():
     assert desk.history["买家甲"][-1].direction == "outgoing"
 
 
+async def test_new_incoming_after_observed_send_does_not_erase_send_evidence():
+    desk, executor, target, set_phase, _ = setup()
+    capture = executor.capture
+    polls = 0
+
+    async def incoming_during_verification():
+        nonlocal polls
+        if ("press", "Return") in desk.actions:
+            polls += 1
+            if polls == 2:
+                desk.history["买家甲"].append(SBubble("incoming", "多久发货"))
+                desk.rows[0].preview = "多久发货"
+        return await capture()
+
+    executor.capture = incoming_during_verification
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "sent_verified" and polls >= 2
+    assert desk.actions.count(("press", "Return")) == 1
+
+
 async def test_dry_run_sends_no_input():
     desk, executor, target, set_phase, phases = setup()
     outcome = await executor.execute(target, RT, set_phase, dry_run=True)
@@ -78,7 +98,7 @@ async def test_stale_trigger_aborts_without_clicking():
     desk, executor, target, set_phase, _ = setup()
     desk.rows[0].preview = "能便宜点吗"
     outcome = await executor.execute(target, RT, set_phase)
-    assert outcome.status == "aborted" and outcome.reason == "trigger_stale_or_unreadable"
+    assert outcome.status == "superseded" and outcome.reason == "trigger_stale_or_unreadable"
     assert desk.actions == []
 
 
@@ -211,3 +231,61 @@ async def test_slow_ocr_uses_elapsed_window_and_still_checks_final_frame():
     outcome = await executor.execute(target, RT, set_phase)
     assert outcome.status == "sent_verified"
     assert post_send_captures == 2  # first early frame plus a frame after the deadline
+
+
+async def test_new_message_after_click_supersedes_old_trigger_without_typing():
+    desk, executor, target, set_phase, _ = setup()
+    click = desk.click
+
+    async def incoming_after_click(x, y):
+        await click(x, y)
+        desk.history["买家甲"].append(SBubble("incoming", "多久发货"))
+        desk.rows[0].preview = "多久发货"
+
+    desk.click = incoming_after_click
+    outcome = await executor.execute(target, RT, set_phase)
+    assert outcome.status == "superseded" and not outcome.typed
+    assert not any(a[0] == "type" for a in desk.actions)
+
+
+async def test_parking_uses_only_visible_excluded_system_conversation():
+    desk, executor, target, set_phase, _ = setup()
+    desk.rows[1].name = "闲小蜜"
+    desk.history["闲小蜜"] = [SBubble("incoming", "系统通知")]
+    assert (await executor.execute(target, RT, set_phase)).status == "sent_verified"
+    result = await executor.park(target, RT)
+    assert result["parked"] and desk.selected == 1
+
+
+async def test_parking_does_not_click_another_customer_or_an_owner_draft():
+    desk, executor, target, set_phase, _ = setup()
+    await executor.execute(target, RT, set_phase)
+    before = list(desk.actions)
+    assert (await executor.park(target, RT))["reason"] == "no_verified_system_row_visible"
+    assert desk.actions == before
+    desk.rows[1].name = "闲小蜜"
+    desk.composer = "店主自己的草稿"
+    assert (await executor.park(target, RT))["reason"] == "owner_changed_target_or_draft_present"
+    assert desk.actions == before
+
+
+async def test_parking_rechecks_pixels_before_clicking_old_row_coordinates():
+    desk, executor, target, set_phase, _ = setup()
+    desk.rows[1].name = "闲小蜜"
+    desk.history["闲小蜜"] = []
+    await executor.execute(target, RT, set_phase)
+    original = executor.capture
+    calls = 0
+
+    async def changing_screen():
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            desk.rows[0].preview = "新来信重新排序"
+        return await original()
+
+    executor.capture = changing_screen
+    before = list(desk.actions)
+    result = await executor.park(target, RT)
+    assert result["reason"] == "screen_changed_during_parking"
+    assert desk.actions == before

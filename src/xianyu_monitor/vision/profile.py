@@ -85,6 +85,7 @@ class Profile(BaseModel):
     colors: Colors = Field(default_factory=Colors)
     min_bubble_height: int = 18
     min_bubble_width: int = 24
+    park_system_conversation: bool = True
 
     @model_validator(mode="after")
     def _geometry(self) -> Profile:

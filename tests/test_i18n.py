@@ -33,7 +33,7 @@ def test_dynamic_keys_exist():
     for kind in ("incoming", "possible", "outgoing", "read_elsewhere"):
         assert f"kind.{kind}" in en
     for status in ("review", "planned", "approved", "queued", "sending", "sent_verified", "sent_unverified",
-                   "dry_run", "rejected", "skipped", "failed", "cancelled"):
+                   "dry_run", "rejected", "skipped", "failed", "cancelled", "superseded", "draft_review"):
         assert f"intent.{status}" in en
 
 

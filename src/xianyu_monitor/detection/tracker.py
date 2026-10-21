@@ -67,7 +67,8 @@ def _badge_value(present: bool, count: int | None) -> int | None:
 
 
 def observe(prev: RowState | None, row: RowObservation, now: dt.datetime, rt: RuntimeSettings,
-            customer_id: str, pane_direction: str | None = None) -> Transition:
+            customer_id: str, pane_direction: str | None = None, pane_changed: bool = False,
+            pane_verified: bool = False) -> Transition:
     """Compute the transition from the persisted state ``prev`` to the observed ``row``."""
     min_conf = float(rt.ocr_min_confidence)
     rel_new = parse_relative(row.time_text, now) if row.time_conf >= min_conf else RelTime("unknown", None)
@@ -143,12 +144,12 @@ def observe(prev: RowState | None, row: RowObservation, now: dt.datetime, rt: Ru
             t.signals.append("repeated_or_unchanged_preview")
     elif badge_unreadable_change:
         t.kind, t.confidence = "possible", 0.5
-    elif preview_changed or recency:
+    elif preview_changed or recency or pane_changed:
         if pane_direction == "outgoing":
             t.kind, t.direction, t.confidence = "outgoing", "outgoing", 0.85
             t.signals.append("pane_last_bubble_outgoing")
         elif pane_direction == "incoming":
-            t.kind, t.direction, t.confidence = "incoming", "incoming", 0.8
+            t.kind, t.direction, t.confidence = "incoming", "incoming", 0.95 if pane_verified else 0.8
             t.signals.append("pane_last_bubble_incoming")
         else:
             t.kind, t.confidence = "possible", 0.6 if preview_changed else 0.35
@@ -156,13 +157,16 @@ def observe(prev: RowState | None, row: RowObservation, now: dt.datetime, rt: Ru
                 t.signals.append("read_elsewhere_with_change")
     elif badge_cleared or badge_down:
         t.kind, t.direction, t.confidence = "read_elsewhere", "none", 0.9
+    if pane_changed and t.kind in {"incoming", "outgoing"}:
+        t.state_changed = True
+        t.signals.append("verified_pane_changed")
     return _finish(t, prev, customer_id)
 
 
 def _finish(t: Transition, prev: RowState | None, customer_id: str) -> Transition:
     prev_digest = prev.digest if prev else "-"
     prev_revision = prev.revision if prev else 0
-    t.state_changed = prev is None or prev.digest != t.new_state.digest or prev.position != t.new_state.position
+    t.state_changed = t.state_changed or prev is None or prev.digest != t.new_state.digest or prev.position != t.new_state.position
     if t.state_changed:
         t.new_state = replace(t.new_state, revision=prev_revision + 1)
     if t.kind is not None:
