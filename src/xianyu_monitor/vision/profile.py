@@ -110,8 +110,8 @@ class Profile(BaseModel):
                 raise ValueError(f"{name} is outside the frame")
         if self.image_dialog_confirm_click and self.image_dialog_confirm:
             x, y = self.image_dialog_confirm_click
-            l, t, r, b = self.image_dialog_confirm
-            if not (l <= x < r and t <= y < b):
+            left, top, right, bottom = self.image_dialog_confirm
+            if not (left <= x < right and top <= y < bottom):
                 raise ValueError("image_dialog_confirm_click is outside the confirm button")
         for anchor in self.anchors:
             _check_box(f"anchor:{anchor.name}", anchor.region, width, height)
