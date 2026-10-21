@@ -67,7 +67,9 @@ class Scene:
 
 
 def base_profile_dict() -> dict:
-    return json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    data["park_system_conversation"] = True  # fake models a verified in-page system chat
+    return data
 
 
 def placeholder(text: str) -> str:

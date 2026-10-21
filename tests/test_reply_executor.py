@@ -7,6 +7,7 @@ from xianyu_monitor.detection.textnorm import normalize_name
 from xianyu_monitor.replies.executor import ReplyExecutor, ReplyTarget
 from xianyu_monitor.runtime_settings import RuntimeSettings
 from xianyu_monitor.vision.analyzer import PaneObservation
+from xianyu_monitor.vision.profile import Profile
 
 RT = RuntimeSettings({"reply_step_delay_seconds": 0.1, "reply_verify_timeout_seconds": 0.3,
                       "full_validation_every_n_frames": 1000, "challenge_probe_every_n_frames": 1000})
@@ -255,6 +256,20 @@ async def test_parking_uses_only_visible_excluded_system_conversation():
     assert (await executor.execute(target, RT, set_phase)).status == "sent_verified"
     result = await executor.park(target, RT)
     assert result["parked"] and desk.selected == 1
+
+
+async def test_parking_defaults_off_and_does_not_click_external_support_row():
+    desk, executor, target, set_phase, _ = setup()
+    data = desk.h.profile_dict.copy()
+    data.pop("park_system_conversation")
+    assert not Profile.model_validate(data).park_system_conversation
+    desk.rows[1].name = "闲小蜜"
+    desk.history["闲小蜜"] = []
+    await executor.execute(target, RT, set_phase)
+    executor.analyzer.profile.park_system_conversation = False
+    before = list(desk.actions)
+    assert (await executor.park(target, RT))["reason"] == "parking_disabled"
+    assert desk.actions == before
 
 
 async def test_parking_does_not_click_another_customer_or_an_owner_draft():

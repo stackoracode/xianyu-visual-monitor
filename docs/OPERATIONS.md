@@ -46,10 +46,12 @@ and resume replies explicitly; do not re-submit an uncertain send without checki
 
 After a reply attempt that opened a customer, the worker samples that conversation
 before leaving. With `park_system_conversation` enabled in the calibration profile
-(default), it selects only a uniquely identified, visible excluded system conversation,
+(off by default), it selects only a uniquely identified, visible excluded system conversation,
 then verifies its title. It never uses another customer as a parking target. An owner
 draft or unavailable system row prevents parking. Pixel changes before the parking
-click cancel that click. Make a system conversation visible to improve unread badges.
+click cancel that click. Enable this only after controlled verification that the system
+row stays in-page: on the tested board, the support row opened a separate support tab,
+so parking stays disabled and the selected-pane detector handles badge-free arrivals.
 
 The selected conversation is monitored even without a red badge: its title must match
 the identified customer, its latest bubble must have a confident incoming direction,

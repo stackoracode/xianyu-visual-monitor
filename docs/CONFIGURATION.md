@@ -67,7 +67,7 @@ against your own frames.
 | `overall_unread_badge` | Informational only. |
 | `conversation_title`, `message_pane`, `composer`, `composer_click`, `composer_placeholder` | Required for replies and for direction checks on the open conversation. |
 | `challenge_probe` | Region OCR'd for login/verification keywords. |
-| `park_system_conversation` | Default `true`: after a reply, leave the customer via a uniquely verified visible system conversation. No fallback to another customer. |
+| `park_system_conversation` | Default `false`: enable only after verifying a system row stays in-page. Some versions open an external support tab. No fallback to another customer. |
 | `anchors` | Regions that look the same in the normal layout (list header, site logo). Their `dhash` is captured from a known-good frame. |
 | `colors` | Measured from reference frames (16-bit color): badge red ≈ (248,76,72), selected row ≈ (232,236,232), incoming bubble ≈ (240,240,240), outgoing bubble ≈ (248,228,8), pane background ≈ (248,252,248). |
 
