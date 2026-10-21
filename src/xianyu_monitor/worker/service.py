@@ -144,6 +144,7 @@ class MonitorService:
         self.last_frame_at: dt.datetime | None = None
         self.last_status = "starting"
         self.frame_watermark: dt.datetime | None = None
+        self._last_idle_return_check = 0.0
         self.latencies: deque[float] = deque(maxlen=200)
         self.ocr_ms: deque[float] = deque(maxlen=200)
         self.low_disk = False
@@ -370,7 +371,54 @@ class MonitorService:
 
     async def handle_frame(self, frame: CapturedFrame) -> FrameObservation | None:
         async with self.desktop_lock:
-            return await self._handle_frame_locked(frame)
+            obs = await self._handle_frame_locked(frame)
+            await self._return_idle_to_list(obs)
+            return obs
+
+    async def _return_idle_to_list(self, obs: FrameObservation | None) -> None:
+        """Called only by monitoring, under the desktop lock, never mid-send."""
+        rt = await self.runtime()
+        if (obs is None or not obs.usable or self.analyzer is None or self.input_factory is None
+                or rt.monitor_mode != "active" or rt.dry_run
+                or time.monotonic() - self._last_idle_return_check < 10):
+            return
+        rows = [r for r in obs.rows if r.present and r.selected and r.name_conf >= float(rt.ocr_min_confidence)]
+        if len(rows) != 1:
+            return
+        from xianyu_monitor.detection.textnorm import normalize_name
+        async with self.db.session() as session:
+            pause = await get_state(session, state_keys.REPLY_PAUSE)
+            if pause.get("paused") and pause.get("reason") in {"idle_return_not_verified", "reply_return_not_verified"}:
+                return  # one failed refresh needs attention, not an endless F5 loop
+            busy = (await session.execute(select(Job.id).where(
+                Job.kind == "reply", Job.status.in_(["pending", "leased"])).limit(1))).scalar_one_or_none()
+            if busy is not None:
+                return
+            customer_ids = list((await session.execute(select(CustomerAlias.customer_id).where(
+                CustomerAlias.alias_norm == normalize_name(rows[0].name)))).scalars())
+            if len(customer_ids) != 1:
+                return
+            aliases = set((await session.execute(select(CustomerAlias.alias_norm).where(
+                CustomerAlias.customer_id == customer_ids[0]))).scalars())
+        self._last_idle_return_check = time.monotonic()
+        async def capture():
+            return (await self.capture_backend.capture()).image
+        async def before_leave(frame, observation):
+            path = self._save_frame(frame, observation.captured_at, rt, observation)
+            result = await self.processor.process(observation, rt, image_path=path)
+            self.counters["events"] += len(result.events)
+            if result.jobs or result.intents:
+                self.wake.set()
+        target = ReplyTarget(customer_ids[0], aliases, set(), "", "")
+        returned = await ReplyExecutor(self.analyzer, capture, self.input_factory()).return_to_list(
+            target, rt, before_leave=before_leave)
+        async with self.db.transaction() as session:
+            await set_state(session, "idle_return_to_list", {**returned, "at": iso(utcnow())})
+        if returned.get("returned"):
+            self.frame_watermark = utcnow()
+            await self._handle_frame_locked(await self.capture_backend.capture(), force_full=True)
+        elif returned.get("pause_replies"):
+            await self.pause_replies("idle_return_not_verified", returned.get("reason", ""))
 
     async def _handle_frame_locked(self, frame: CapturedFrame, force_full: bool = False) -> FrameObservation | None:
         if self.frame_watermark is not None and frame.captured_at <= self.frame_watermark:
@@ -646,9 +694,8 @@ class MonitorService:
                         if result.jobs or result.intents:
                             self.wake.set()
 
-                    returned = (await executor.return_to_list(target, rt, before_leave=before_leave)
-                                if outcome.submitted else {"returned": False, "reason": "not_submitted"})
-                    if outcome.submitted:
+                    returned = await executor.return_to_list(target, rt, before_leave=before_leave)
+                    if returned.get("returned"):
                         await self._handle_frame_locked(await self.capture_backend.capture(), force_full=True)
                     details["return_to_list"] = returned
                     async with self.db.transaction() as session:

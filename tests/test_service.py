@@ -279,8 +279,8 @@ async def test_new_input_during_targeting_replans_then_parks_and_never_sends_old
     desk.click = incoming_on_first_open
     await drain_jobs(service, "reply")
     assert not any(a[0] == "type" for a in desk.actions)
-    assert ("press", "F5") not in desk.actions
-    assert desk.selected == 0
+    assert desk.actions.count(("press", "F5")) == 1
+    assert desk.selected is None
     async with db.session() as s:
         intents = (await s.execute(select(ReplyIntent).order_by(ReplyIntent.id))).scalars().all()
         assert [(i.trigger_text, i.status) for i in intents] == [("还在吗", "superseded"), ("多久发货", "queued")]
