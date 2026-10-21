@@ -27,7 +27,8 @@ def rule_from_row(row: KeywordRule) -> Rule:
                 match_mode=row.match_mode, patterns=list(row.patterns or []),
                 exclude_patterns=list(row.exclude_patterns or []), template=row.template,
                 cooldown_seconds=row.cooldown_seconds, scope=row.scope, allow_sensitive=row.allow_sensitive,
-                requires_review=row.requires_review, enabled=row.enabled)
+                requires_review=row.requires_review, enabled=row.enabled,
+                trigger_type=row.trigger_type, send_image=row.send_image)
 
 
 async def load_rules(session: AsyncSession) -> list[Rule]:
@@ -60,6 +61,8 @@ async def enqueue_reply_job(session: AsyncSession, intent: ReplyIntent, delay_se
                            available_at=utcnow() + dt.timedelta(seconds=delay_seconds))
     intent.job_id = job.id
     intent.status = "queued"
+    if intent.send_image:
+        intent.image_status = "pending"
     intent.updated_at = utcnow()
 
 
@@ -96,11 +99,17 @@ async def plan_reply(session: AsyncSession, event: MessageEvent, customer: Custo
     if existing is not None:
         return existing
     await supersede_unsent(session, customer.id, event.id)
+    await session.flush()
+    prior_first = (await session.execute(select(ReplyIntent.id).where(
+        ReplyIntent.customer_id == customer.id, ReplyIntent.first_contact.is_(True),
+        ReplyIntent.status.notin_(["superseded", "rejected", "cancelled", "skipped", "failed"])
+    ).limit(1))).scalar_one_or_none()
+    first_contact = customer.status == "new" and not customer.is_baseline and prior_first is None
     rules = rules if rules is not None else await load_rules(session)
     decision = evaluate(event.preview_raw, rules, customer_status=customer.status,
                         customer_name=customer.display_name, sensitive_terms=rt.sensitive_terms,
                         attachment_markers=rt.attachment_markers, negations=rt.negation_terms,
-                        truncated=event.preview_truncated)
+                        truncated=event.preview_truncated, first_contact=first_contact)
     if decision.action == "none":
         return None
     reasons = list(decision.reasons)
@@ -128,7 +137,10 @@ async def plan_reply(session: AsyncSession, event: MessageEvent, customer: Custo
     intent = ReplyIntent(message_event_id=event.id, customer_id=customer.id,
                          rule_id=decision.rule.id if decision.rule else None, status=status, reasons=reasons,
                          trigger_text=event.preview_raw, reply_text=decision.reply_text, created_at=now,
-                         updated_at=now)
+                         updated_at=now, first_contact=first_contact,
+                         send_image=bool(decision.rule and decision.rule.send_image),
+                         image_status="pending" if decision.rule and decision.rule.send_image else "none",
+                         image_path=str(rt.reply_default_image_path) if decision.rule and decision.rule.send_image else None)
     session.add(intent)
     await session.flush()
     if status == "planned":

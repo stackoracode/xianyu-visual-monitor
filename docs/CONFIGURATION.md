@@ -122,3 +122,24 @@ messages cannot be reconstructed. See [burst handling](OPERATIONS.md#bursts-and-
 `reply_refresh_timeout_seconds` (1–60, default 20) bounds recovery after F5.
 Send evidence is saved before reload; page-return failures do not change delivery status.
 Full wrapped bubble text is read using multi-line OCR with scaled input.
+
+## Text and image reply rules
+
+A rule can use `trigger_type: keyword` (the existing behavior) or `first_contact`.
+First-contact rules need no patterns and apply only to a non-baseline new customer
+whose first reply has not already been queued, reviewed or sent. Higher-priority
+keyword rules win normally, so a greeting and welcome cannot send two replies to the
+same event. A superseded untyped welcome can be re-planned for the newer input; a
+verified text consumes the welcome even if its image later fails.
+
+Set `send_image` on a rule and configure the private `reply_default_image_path` on
+the board. `reply_image_send_enabled` is off by default and is a separate real-image
+switch. Only local PNG/JPEG/WebP files up to 10 MiB / 32 megapixels are supported.
+The image itself stays outside the repository. The selected path and its SHA256 are
+snapshotted for the attempt; replacing a file before submission aborts the image.
+
+The desktop profile needs `image_attach_click`, `image_dialog_title`,
+`image_dialog_path` and `image_dialog_keywords`. These identify the native file
+chooser and full path entry, using screenshots/OCR. The supported flow confirms a
+file and then observes the actual outgoing image; a preview-only dialog is not send
+success. Recalibrate if the desktop, chooser or page layout changes.

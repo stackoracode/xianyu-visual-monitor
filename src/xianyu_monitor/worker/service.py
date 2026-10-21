@@ -48,6 +48,7 @@ from xianyu_monitor.ocr.pool import OcrPool
 from xianyu_monitor.queueing.bounded import BoundedQueue
 from xianyu_monitor.queueing.jobs import ClaimedJob, JobQueue, enqueue
 from xianyu_monitor.replies.executor import ReplyExecutor, ReplyTarget
+from xianyu_monitor.replies.images import ImageOutcome, ImageReplyExecutor
 from xianyu_monitor.replies.input import InputAdapter
 from xianyu_monitor.runtime_settings import RuntimeSettings, load_runtime
 from xianyu_monitor.settings import Settings
@@ -229,6 +230,16 @@ class MonitorService:
                     intent.status = "sent_unverified"
                     intent.reasons = list(intent.reasons or []) + ["worker_restarted_during_send"]
                 intent.updated_at = utcnow()
+            images = (await session.execute(select(ReplyIntent).where(
+                ReplyIntent.send_image.is_(True), ReplyIntent.image_status.in_(["pending", "preparing"]),
+                ReplyIntent.status == "sent_verified"
+            ))).scalars().all()
+            for intent in images:
+                job = await session.get(Job, intent.job_id) if intent.job_id else None
+                if job is not None and job.status == "uncertain":
+                    intent.image_status = "uncertain"
+                    intent.verification = {**(intent.verification or {}),
+                                           "image": {"status": "uncertain", "reason": "worker_restarted_during_image"}}
 
     def request_stop(self) -> None:
         log.info("stop requested")
@@ -545,6 +556,17 @@ class MonitorService:
         if intent is None or intent.status != "queued":
             await self.jobs.succeed(job, {"skipped": intent.status if intent else "missing"})
             return "skipped"
+        if intent.first_contact:
+            async with self.db.session() as session:
+                prior = (await session.execute(select(ReplyIntent.id).where(
+                    ReplyIntent.customer_id == intent.customer_id, ReplyIntent.first_contact.is_(True),
+                    ReplyIntent.id != intent.id,
+                    ReplyIntent.status.in_(["sent_verified", "sent_unverified", "sending"])
+                ).limit(1))).scalar_one_or_none()
+            if prior is not None:
+                await self._update_intent(intent_id, "superseded", "first_contact_already_replied")
+                await self.jobs.succeed(job, {"skipped": "first_contact_already_replied"})
+                return "superseded"
         if paused or challenge or rt.reply_mode == "off" or not rt.reply_send_enabled:
             await self._update_intent(intent_id, "review", "replies_paused_or_disabled_at_send_time")
             await self.jobs.succeed(job, {"returned_to_review": True})
@@ -568,7 +590,48 @@ class MonitorService:
         async with self.desktop_lock:
             outcome = await executor.execute(target, rt, lambda phase: self.jobs.set_phase(job, phase),
                                              dry_run=bool(rt.dry_run))
-            details = await self._finish_reply(job, intent_id, outcome)
+            with_image = bool(intent.send_image and outcome.status == "sent_verified")
+            details = await self._finish_reply(job, intent_id, outcome, complete_job=not with_image)
+            if with_image:
+                async def remember_asset(digest):
+                    async with self.db.transaction() as session:
+                        row = await session.get(ReplyIntent, intent_id)
+                        row.image_sha256, row.image_status = digest, "preparing"
+
+                async def observe_image_frame(frame, obs):
+                    if any(r.selected for r in obs.rows):
+                        obs.pane = await self.analyzer.analyze_pane(frame)
+                    result = await self.processor.process(obs, rt, image_path=self._save_frame(frame, obs.captured_at, rt, obs))
+                    self.counters["events"] += len(result.events)
+                    if result.jobs or result.intents:
+                        self.wake.set()
+
+                try:
+                    if not rt.reply_image_send_enabled and not job.payload.get("image_test_authorized", False):
+                        image = ImageOutcome("cancelled", "image_sending_disabled")
+                    else:
+                        image = await ImageReplyExecutor(executor).execute(
+                            target, intent.image_path, rt, lambda phase: self.jobs.set_phase(job, phase),
+                            remember_asset, intent.image_sha256, on_observation=observe_image_frame)
+                except Exception:
+                    log.exception("image reply failed for intent %s", intent_id)
+                    image = ImageOutcome("uncertain", "image_handler_crashed", pause_replies=True)
+                details["image"] = {"status": image.status, "reason": image.reason,
+                                    "submitted": image.submitted, **image.details}
+                async with self.db.transaction() as session:
+                    row = await session.get(ReplyIntent, intent_id)
+                    row.image_status, row.verification = image.status, details
+                    record = await session.get(Job, job.id)
+                    if record is not None:
+                        record.result = details
+                if image.status in {"sent_verified", "cancelled"}:
+                    await self.jobs.succeed(job, details)
+                elif image.status == "uncertain":
+                    await self.jobs.mark_uncertain(job, image.reason, details)
+                else:
+                    await self.jobs.fail(job, image.reason, retryable=False)
+                if image.pause_replies:
+                    await self.pause_replies(f"reply_{image.reason}"[:64], f"intent {intent_id}")
             if outcome.clicked:
                 try:
                     # Persist a newer incoming message BEFORE leaving the pane that proves its direction.
@@ -602,7 +665,7 @@ class MonitorService:
                     self.frame_watermark = utcnow()
         return outcome.status
 
-    async def _finish_reply(self, job, intent_id, outcome) -> dict:
+    async def _finish_reply(self, job, intent_id, outcome, complete_job=True) -> dict:
         details = {"status": outcome.status, "reason": outcome.reason, "clicked": outcome.clicked,
                    "typed": outcome.typed, "submitted": outcome.submitted, **outcome.details}
         async with self.db.session() as session:
@@ -614,7 +677,8 @@ class MonitorService:
             await self.jobs.succeed(job, details)
         elif outcome.status == "sent_verified":
             await self._update_intent(intent_id, "sent_verified", None, details, sent=True)
-            await self.jobs.succeed(job, details)
+            if complete_job:
+                await self.jobs.succeed(job, details)
         elif outcome.status == "sent_unverified":
             await self._update_intent(intent_id, "sent_unverified", outcome.reason, details, sent=True)
             await self.jobs.mark_uncertain(job, outcome.reason, details)
@@ -630,6 +694,11 @@ class MonitorService:
                 await self.jobs.succeed(job, details)
         if outcome.pause_replies:
             await self.pause_replies(f"reply_{outcome.reason}"[:64], f"intent {intent_id}")
+        if outcome.status != "sent_verified":
+            async with self.db.transaction() as session:
+                row = await session.get(ReplyIntent, intent_id)
+                if row is not None and row.send_image:
+                    row.image_status = "cancelled"
         return details
 
     # ----- heartbeat / retention -----

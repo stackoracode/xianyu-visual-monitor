@@ -206,3 +206,17 @@ async def test_logout(client):
     token = await login(client)
     await client.post("/logout", data={"csrf_token": token})
     assert (await client.get("/")).status_code == 303
+
+
+async def test_first_contact_image_rule_editor_and_tester(client, db):
+    token = await login(client)
+    response = await client.post('/rules', data={'csrf_token': token, 'name': 'welcome', 'trigger_type': 'first_contact',
+                                                'patterns': '', 'template': '您好，请提供需求', 'send_image': '1',
+                                                'enabled': '1', 'scope': 'new'})
+    assert response.status_code == 303
+    async with db.session() as s:
+        rule = (await s.execute(select(KeywordRule))).scalar_one()
+        assert rule.trigger_type == 'first_contact' and rule.send_image and rule.patterns == []
+    response = await client.post('/rules/test', data={'csrf_token': token, 'text': '咨询一下', 'customer_status': 'new',
+                                                     'first_contact': '1'})
+    assert '您好，请提供需求' in response.text

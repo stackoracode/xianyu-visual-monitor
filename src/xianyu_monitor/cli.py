@@ -280,13 +280,15 @@ def cmd_import_rules(args: argparse.Namespace) -> int:
                         template=item["template"], cooldown_seconds=int(item.get("cooldown_seconds", 3600)),
                         scope=item.get("scope", "all"), allow_sensitive=bool(item.get("allow_sensitive", False)),
                         requires_review=bool(item.get("requires_review", False)),
-                        enabled=bool(item.get("enabled", False)) and args.keep_enabled)
+                        enabled=bool(item.get("enabled", False)) and args.keep_enabled,
+                        trigger_type=str(item.get("trigger_type", "keyword")), send_image=bool(item.get("send_image", False)))
             validate_rule(rule)
             session.add(KeywordRule(name=rule.name, enabled=rule.enabled, priority=rule.priority,
                                     match_type=rule.match_type, match_mode=rule.match_mode, patterns=rule.patterns,
                                     exclude_patterns=rule.exclude_patterns, template=rule.template,
                                     cooldown_seconds=rule.cooldown_seconds, scope=rule.scope,
                                     allow_sensitive=rule.allow_sensitive, requires_review=rule.requires_review,
+                                    trigger_type=rule.trigger_type, send_image=rule.send_image,
                                     created_at=utcnow(), updated_at=utcnow()))
             count += 1
         return count

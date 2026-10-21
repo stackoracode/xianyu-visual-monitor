@@ -643,7 +643,8 @@ def create_app(settings: Settings, db: Database | None = None) -> FastAPI:
                     exclude_patterns=lines("exclude_patterns"), template=str(data.get("template", "")).strip(),
                     cooldown_seconds=max(0, int(data.get("cooldown_seconds", 3600) or 0)),
                     scope=str(data.get("scope", "all")), allow_sensitive=data.get("allow_sensitive") == "1",
-                    requires_review=data.get("requires_review") == "1", enabled=data.get("enabled") == "1")
+                    requires_review=data.get("requires_review") == "1", enabled=data.get("enabled") == "1",
+                    trigger_type=str(data.get("trigger_type", "keyword")), send_image=data.get("send_image") == "1")
 
     @app.get("/rules", response_class=HTMLResponse)
     async def rules(request: Request, edit: int = 0):
@@ -671,7 +672,8 @@ def create_app(settings: Settings, db: Database | None = None) -> FastAPI:
                 row = KeywordRule(created_at=utcnow())
                 session.add(row)
             for field_name in ("name", "priority", "match_type", "match_mode", "patterns", "exclude_patterns",
-                               "template", "cooldown_seconds", "scope", "allow_sensitive", "requires_review", "enabled"):
+                               "template", "cooldown_seconds", "scope", "allow_sensitive", "requires_review", "enabled",
+                               "trigger_type", "send_image"):
                 setattr(row, field_name, getattr(rule, field_name))
             row.updated_at = utcnow()
             await services.audit(session, user.username, "rule_save", {"rule": rule_id or "new", "enabled": rule.enabled})
@@ -709,7 +711,8 @@ def create_app(settings: Settings, db: Database | None = None) -> FastAPI:
                 r.enabled = True
         decision = evaluate(text, rules_list, customer_status=status, customer_name="{customer_name}",
                             sensitive_terms=rt.sensitive_terms, attachment_markers=rt.attachment_markers,
-                            negations=rt.negation_terms)
+                            negations=rt.negation_terms,
+                            first_contact=status == "new" and data.get("first_contact") == "1")
         return await render(request, "rules.html", user, rules=rows, editing=None,
                             test={"text": text, "decision": decision, "status": status})
 

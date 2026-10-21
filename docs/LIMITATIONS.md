@@ -58,3 +58,16 @@ Deferred first alerts after an initial phone read and a controlled real reply ha
 board acceptance. Synthetic burst tests cover state transitions, not complete visual recall.
 Collapsed identical bubbles, preview truncation and arrivals inside the final input race
 need additional controlled samples; intermediate unseen questions cannot be guaranteed.
+
+## Image upload visibility
+
+Native file choosers temporarily cover the conversation, and a large outgoing image
+can hide preceding messages. Input received during that blind interval may become
+read and be replaced by the outgoing preview before any screenshot can observe it.
+This is the same pixel-only history limit as rapid text bursts, not a guarantee of
+complete capture. Observable context changes are retained; unseen input cannot be
+reconstructed. A platform preview or a selected filename is never delivery evidence.
+
+Matching a thumbnail confirms only the visible UI state. Similar images, substantial
+cropping, loading overlays or a new UI variant may require review. An uncertain image
+is never automatically resent; verify receipt with the owner before retrying manually.
