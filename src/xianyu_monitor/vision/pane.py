@@ -35,31 +35,34 @@ def _segments(image: Image.Image, target: tuple[int, int, int], tol: int, min_w:
     rgb = image.convert("RGB")
     w, h = rgb.size
     px = rgb.load()
-    row_ranges: list[tuple[int, int, int] | None] = []
+    # Keep disconnected same-color pixels (e.g. avatar highlights) separate from
+    # a short bubble. Row extrema used to stretch a 48px bubble across an avatar
+    # and fail the fill test even though the message was plainly visible.
+    matching: set[tuple[int, int]] = set()
     for y in range(h):
-        xs = [x for x in range(w) if _matches(px[x, y], target, tol)]
-        if len(xs) >= min_w:
-            row_ranges.append((min(xs), max(xs), len(xs)))
-        else:
-            row_ranges.append(None)
+        matching.update((x, y) for x in range(w) if _matches(px[x, y], target, tol))
     boxes: list[tuple[Box, float]] = []
-    y = 0
-    while y < h:
-        if row_ranges[y] is None:
-            y += 1
-            continue
-        start = y
-        left, right, hits = w, 0, 0
-        while y < h and row_ranges[y] is not None:
-            lo, hi, n = row_ranges[y]  # type: ignore[misc]
-            left, right, hits = min(left, lo), max(right, hi), hits + n
-            y += 1
-        height = y - start
+    while matching:
+        seed = matching.pop()
+        pending = [seed]
+        left = right = seed[0]
+        top = bottom = seed[1]
+        hits = 0
+        while pending:
+            x, y = pending.pop()
+            left, right = min(left, x), max(right, x)
+            top, bottom = min(top, y), max(bottom, y)
+            hits += 1
+            for neighbor in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if neighbor in matching:
+                    matching.remove(neighbor)
+                    pending.append(neighbor)
+        height = bottom - top + 1
         width = right - left + 1
         if height >= min_h and width >= min_w:
             fill = hits / float(width * height)
             if fill >= 0.45:
-                boxes.append(((left, start, right + 1, y), fill))
+                boxes.append(((left, top, right + 1, bottom + 1), fill))
     return boxes
 
 

@@ -239,13 +239,14 @@ class ReplyExecutor:
                             clicked=True, typed=True, submitted=True, details=last_seen)
 
     async def return_to_list(self, target: ReplyTarget, rt: RuntimeSettings, now=utcnow, before_leave=None) -> dict:
-        """F5 only after submission was verified/recorded by the caller; never click a system row."""
+        """Leave a finished/cancelled action or an idle chat; preserve drafts and target changes."""
         frame = await self.capture()
         obs = await self.analyzer.analyze(frame, now(), rt, force_full=True)
         if obs.status != "ok":
             return {"returned": False, "reason": "screen_not_ready"}
         pane = await self.analyzer.analyze_pane(frame)
-        if not self._title_matches(pane, target, rt) or not self._composer_empty(pane):
+        if (not self._title_matches(pane, target, rt) or not self._composer_empty(pane)
+                or pane.composer_conf < float(rt.ocr_min_confidence)):
             return {"returned": False, "reason": "owner_changed_target_or_draft_present"}
         if before_leave is not None:
             obs.pane = pane

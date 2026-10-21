@@ -127,3 +127,20 @@ The worker uses F5 after the image finishes or safely fails, provided the target
 still verified and there is no draft. An unknown/blocked file dialog pauses instead
 of guessing keys in another window. Incoming context observed before selection can
 cancel a stale image; observable newer messages during verification are persisted.
+
+## Automatic replies and idle conversations
+
+`reply_mode=auto` and `reply_send_enabled=true` send matching non-review rules
+without an approval click. A `review` after targeting can instead mean that the
+latest bubble could not be verified; inspect the reason, not just the status.
+Short bubbles are segmented as connected color components so isolated avatar
+highlights cannot stretch them into an invalid bubble.
+
+After a clicked reply attempt, including a pre-send cancellation or a superseded
+trigger, the worker records visible incoming context and uses F5 to leave the chat.
+Active monitoring also returns an idle selected known customer to the list when
+there are no pending/leased reply jobs. Both paths recheck the target and empty
+composer and verify that F5 actually returned. Owner drafts, unknown targets and
+login/file dialogs are preserved rather than blindly refreshed. Baseline and
+dry-run modes do not perform idle navigation. Never click a system conversation
+as a substitute for returning to the list.

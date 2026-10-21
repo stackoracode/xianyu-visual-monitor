@@ -295,3 +295,19 @@ async def test_wrapped_bubble_uses_all_lines_for_send_verification():
     desk.h.fake.recognize_line = line_only
     result = await executor.execute(target, RT, set_phase)
     assert result.status == "sent_verified" and result.submitted
+
+async def test_f5_preserves_composer_when_ocr_is_unreadable():
+    desk, executor, target, set_phase, _ = setup()
+    await executor.execute(target, RT, set_phase)
+    analyze = executor.analyzer.analyze_pane
+
+    async def unreadable(frame):
+        pane = await analyze(frame)
+        pane.composer_text, pane.composer_conf = '', 0.
+        return pane
+
+    executor.analyzer.analyze_pane = unreadable
+    before = list(desk.actions)
+    result = await executor.return_to_list(target, RT)
+    assert result['reason'] == 'owner_changed_target_or_draft_present'
+    assert desk.actions == before
