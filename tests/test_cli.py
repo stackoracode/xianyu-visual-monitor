@@ -1,6 +1,58 @@
 import json
+from types import SimpleNamespace
+
+import pytest
 
 from xianyu_monitor.cli import build_parser, main
+
+
+@pytest.mark.parametrize("mismatch", [None, "cold", "warm", "warm_score", "warm_missing"])
+def test_image_benchmark_checks_both_cache_states_and_resets_each_frame(monkeypatch, mismatch):
+    from xianyu_monitor.cli import _benchmark_image_matches
+    from xianyu_monitor.vision import reply_image
+
+    expected = reply_image.ImageMatch((10, 20, 110, 80), .98)
+    changed = reply_image.ImageMatch((10, 21, 110, 81), .98)
+    calls = []
+
+    def exhaustive(*args):
+        assert not reply_image._THUMBS
+        calls.append("exhaustive")
+        return expected
+
+    def fast(*args):
+        state = "warm" if reply_image._THUMBS else "cold"
+        calls.append(state)
+        reply_image._THUMBS[("fixture",)] = object()
+        if state == mismatch:
+            return changed
+        if state == "warm" and mismatch == "warm_score":
+            return reply_image.ImageMatch(expected.box, .97)
+        if state == "warm" and mismatch == "warm_missing":
+            return None
+        return expected
+
+    monkeypatch.setattr(reply_image, "_THUMBS", {})
+    monkeypatch.setattr(reply_image, "find_outgoing_image_exhaustive", exhaustive)
+    monkeypatch.setattr(reply_image, "find_outgoing_image", fast)
+    profile = SimpleNamespace(message_pane=(0, 0, 200, 100), image_match_threshold=.92)
+    for _ in range(2):
+        report = _benchmark_image_matches(None, None, profile)
+        assert report["image_match_cold_identical"] == (mismatch != "cold")
+        assert report["image_match_warm_identical"] == (mismatch not in {"warm", "warm_score", "warm_missing"})
+        assert report["image_match_identical"] == (mismatch is None)
+        assert report["image_match_found"]
+    assert calls == ["exhaustive", "cold", "warm"] * 2
+
+
+def test_image_benchmark_accepts_agreement_on_absence(monkeypatch):
+    from xianyu_monitor.cli import _benchmark_image_matches
+    from xianyu_monitor.vision import reply_image
+
+    monkeypatch.setattr(reply_image, "find_outgoing_image_exhaustive", lambda *a: None)
+    monkeypatch.setattr(reply_image, "find_outgoing_image", lambda *a: None)
+    report = _benchmark_image_matches(None, None, SimpleNamespace(message_pane=None, image_match_threshold=.92))
+    assert report["image_match_identical"] and not report["image_match_found"]
 
 
 def test_parser_has_all_commands():

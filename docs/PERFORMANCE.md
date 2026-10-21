@@ -58,7 +58,7 @@ Save a few screenshots locally (they stay private), for example the list, an ope
 before and after pasting a draft, and after sending. Then run:
 
 ```bash
-sudo -u xvm env XVM_ENV_FILE=/etc/xianyu-monitor/monitor.env /opt/xianyu-monitor/env/bin/xianyu-monitor \
+XVM_ENV_FILE=/etc/xianyu-monitor/monitor.env /root/miniconda3/envs/xianyu-monitor/bin/xianyu-monitor \
   benchmark --profile profile.json --processes before.png after.png [--reference /path/reply.png]
 ```
 
@@ -68,6 +68,14 @@ The JSON output contains only timings and booleans:
 * `fresh_reads_identical`: OCR reads of the same pixels agree.
 * `probe_full_ms` and `probe_incremental_ms`, plus `probe_incremental_matches_full`.
 * `image_match_exhaustive_ms` and `image_match_fast_*_ms`, plus `image_match_identical`.
+
+Run from `/root/02project/01xianyumonitor` on the current Conda deployment. Select a frame
+where the reference image is visible **inside the profile's message pane** and confirm
+`image_match_found: true`; agreement on absence alone does not validate the visible-image path.
+Each frame starts with an empty thumbnail cache. `image_match_cold_identical` and
+`image_match_warm_identical` check both calls against the exhaustive result (box and score);
+`image_match_identical` requires both to agree. Stop the worker during timing to avoid
+competing OCR, and restore it when finished. Keep frames and profiles private.
 
 Repeat with `--cpus none` to compare pinning. Every `phase_seconds` entry of a reply's
 verification JSON (Replies page) shows where time is spent, and the heartbeat reports OCR cache

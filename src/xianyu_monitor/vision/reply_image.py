@@ -56,6 +56,11 @@ _THUMBS: OrderedDict[tuple, object] = OrderedDict()
 _THUMB_CACHE_SIZE = 160
 
 
+def clear_thumbnail_cache() -> None:
+    """Start an independent cold-cache measurement without replacing the cache object."""
+    _THUMBS.clear()
+
+
 def _reference_key(reference: Image.Image) -> str:
     key = getattr(reference, "_xvm_digest", None)
     if key is None:
