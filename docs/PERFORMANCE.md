@@ -45,12 +45,19 @@ LubanCat-4 RK3588, profile 4 (1280x1440, 18 rows), RapidOCR in a process pinned 
 | Full list analysis | 8.8–12.9 s | 43–55 ms (identical pixels) |
 | Pane analysis | 1.3–3.0 s | 12–19 ms (identical pixels) |
 | Image matcher, image absent | 15.4 s | 0.5 s |
-| Image matcher, image present | 15.4 s | 12.9–13.4 s with the first screen version; replaced by the exact-score climb, to be re-measured |
+| Image matcher, image present | 15.30–15.36 s | Exact-score climb: 1.96–1.99 s cold, 0.833–0.843 s warm |
 | Full safety-probe read | 8.4–12.7 s | unchanged when it must run (first read, large change); see #23 |
 
 All agreement checks were true (`fresh_reads_identical`, `cached_matches_fresh`,
 `image_match_identical`, `probe_incremental_matches_full`). The first read of changed content
 remains expensive: the detector input sizes in #23 and an NPU backend (#24) are the next steps.
+
+The visible-image matcher was re-measured on the board after merging #20 (`fd3eea8`).
+Two isolated runs used the same private 1280x1440 frame from #25, the calibrated 650x272
+message pane and the original reference asset. The extended benchmark in #26 also checked
+the warm result: `image_match_found`, `image_match_cold_identical`, `image_match_warm_identical`
+and aggregate `image_match_identical` were all true. These measurements validate that frame;
+they do not prove equality on every possible image or resolve the novelty issue #21.
 
 ## Measuring on the board
 
