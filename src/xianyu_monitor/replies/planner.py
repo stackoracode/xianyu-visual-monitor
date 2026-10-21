@@ -5,12 +5,12 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from xianyu_monitor import state_keys
 from xianyu_monitor.db import get_state
-from xianyu_monitor.models import Customer, KeywordRule, MessageEvent, ReplyIntent
+from xianyu_monitor.models import Customer, Job, JobAttempt, KeywordRule, MessageEvent, ReplyIntent
 from xianyu_monitor.queueing.jobs import enqueue
 from xianyu_monitor.replies.rules import Rule, evaluate
 from xianyu_monitor.runtime_settings import RuntimeSettings
@@ -19,6 +19,7 @@ from xianyu_monitor.timeutil import utcnow
 log = logging.getLogger(__name__)
 
 SENT_STATUSES = ("queued", "sending", "sent_verified", "sent_unverified")
+SAFE_PHASES = ("queued", "recovered", "started", "retry_wait", "precheck", "targeting", "verifying_target")
 
 
 def rule_from_row(row: KeywordRule) -> Rule:
@@ -44,12 +45,44 @@ async def _recent_count(session: AsyncSession, customer_id: str, since: dt.datet
     return int((await session.execute(query)).scalar_one())
 
 
-async def enqueue_reply_job(session: AsyncSession, intent: ReplyIntent) -> None:
-    job, _ = await enqueue(session, "reply", f"reply:{intent.id}", {"intent_id": intent.id},
-                           priority=10, max_attempts=3)
+async def enqueue_reply_job(session: AsyncSession, intent: ReplyIntent, delay_seconds: float = 0) -> None:
+    key = f"reply:{intent.id}"
+    if intent.job_id:
+        previous = await session.get(Job, intent.job_id)
+        if previous is not None and previous.status == "succeeded" and (
+            (previous.result or {}).get("typed") is False
+            or (previous.result or {}).get("returned_to_review")
+            or (previous.result or {}).get("dry_run")
+        ):
+            key += f":after:{previous.id}"
+    job, _ = await enqueue(session, "reply", key, {"intent_id": intent.id},
+                           priority=10, max_attempts=3,
+                           available_at=utcnow() + dt.timedelta(seconds=delay_seconds))
     intent.job_id = job.id
     intent.status = "queued"
     intent.updated_at = utcnow()
+
+
+async def supersede_unsent(session: AsyncSession, customer_id: str, event_id: int) -> None:
+    """Coalesce a burst to its latest observed input, but never cancel typed/sent work."""
+    candidates = (await session.execute(select(ReplyIntent).where(
+        ReplyIntent.customer_id == customer_id, ReplyIntent.message_event_id < event_id,
+        ReplyIntent.status.in_(["queued", "sending"])
+    ))).scalars().all()
+    for intent in candidates:
+        result = await session.execute(update(Job).where(
+            Job.id == intent.job_id, Job.status.in_(["pending", "leased"]), Job.phase.in_(SAFE_PHASES)
+        ).values(status="cancelled", phase="superseded", lease_owner=None, lease_expires_at=None,
+                 finished_at=utcnow(), updated_at=utcnow(), last_error="superseded_by_new_incoming")
+          .execution_options(synchronize_session=False))
+        if result.rowcount:
+            intent.status = "superseded"
+            intent.reasons = list(intent.reasons or []) + ["superseded_by_new_incoming"]
+            intent.updated_at = utcnow()
+            await session.execute(update(JobAttempt).where(
+                JobAttempt.job_id == intent.job_id, JobAttempt.finished_at.is_(None)
+            ).values(outcome="cancelled", phase="superseded", finished_at=utcnow(),
+                     error="superseded_by_new_incoming"))
 
 
 async def plan_reply(session: AsyncSession, event: MessageEvent, customer: Customer, rt: RuntimeSettings,
@@ -62,6 +95,7 @@ async def plan_reply(session: AsyncSession, event: MessageEvent, customer: Custo
         select(ReplyIntent).where(ReplyIntent.message_event_id == event.id))).scalar_one_or_none()
     if existing is not None:
         return existing
+    await supersede_unsent(session, customer.id, event.id)
     rules = rules if rules is not None else await load_rules(session)
     decision = evaluate(event.preview_raw, rules, customer_status=customer.status,
                         customer_name=customer.display_name, sensitive_terms=rt.sensitive_terms,
@@ -98,5 +132,5 @@ async def plan_reply(session: AsyncSession, event: MessageEvent, customer: Custo
     session.add(intent)
     await session.flush()
     if status == "planned":
-        await enqueue_reply_job(session, intent)
+        await enqueue_reply_job(session, intent, float(rt.reply_debounce_seconds))
     return intent

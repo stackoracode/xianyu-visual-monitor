@@ -142,6 +142,7 @@ class MonitorService:
                          "consecutive_capture_failures": 0, "consecutive_layout_failures": 0, "events": 0}
         self.last_frame_at: dt.datetime | None = None
         self.last_status = "starting"
+        self.frame_watermark: dt.datetime | None = None
         self.latencies: deque[float] = deque(maxlen=200)
         self.ocr_ms: deque[float] = deque(maxlen=200)
         self.low_disk = False
@@ -329,7 +330,8 @@ class MonitorService:
 
     async def capture_once(self, rt: RuntimeSettings) -> None:
         try:
-            frame = await self.capture_backend.capture()
+            async with self.desktop_lock:
+                frame = await self.capture_backend.capture()
         except (CaptureError, OSError) as exc:
             self.counters["capture_failures"] += 1
             self.counters["consecutive_capture_failures"] += 1
@@ -356,6 +358,17 @@ class MonitorService:
                 self.frames.task_done()
 
     async def handle_frame(self, frame: CapturedFrame) -> FrameObservation | None:
+        async with self.desktop_lock:
+            return await self._handle_frame_locked(frame)
+
+    async def _handle_frame_locked(self, frame: CapturedFrame, force_full: bool = False) -> FrameObservation | None:
+        if self.frame_watermark is not None and frame.captured_at <= self.frame_watermark:
+            obs = FrameObservation(frame.captured_at, frame.image.width, frame.image.height, "superseded",
+                                   layout_issues=["queued_before_newer_observation_or_desktop_action"])
+            self.counters["superseded_frames"] = self.counters.get("superseded_frames", 0) + 1
+            await self.processor.process(obs, await self.runtime(), capture_ms=frame.capture_ms)
+            return obs
+        self.frame_watermark = frame.captured_at
         await self.refresh_profile()
         rt = await self.runtime()
         self.counters["frames"] += 1
@@ -365,15 +378,12 @@ class MonitorService:
             await self._set_health("not_calibrated")
             self._save_latest(frame.image)
             return None
-        async with self.desktop_lock:
-            obs = await self.analyzer.analyze(frame.image, frame.captured_at, rt)  # type: ignore[arg-type]
-            pane_direction = None
-            if obs.status == "ok" and obs.changed and any(r.selected for r in obs.rows) \
-                    and self.analyzer.profile.message_pane is not None:
-                pane = await self.analyzer.analyze_pane(frame.image)
-                last = pane.last_bubble
-                if last is not None and last.confidence >= float(rt.ocr_min_confidence):
-                    pane_direction = last.direction if last.direction != "unknown" else None
+        obs = await self.analyzer.analyze(frame.image, frame.captured_at, rt, force_full=force_full)
+        pane_direction = None
+        if obs.status == "ok" and obs.changed and any(r.selected for r in obs.rows) \
+                and self.analyzer.profile.message_pane is not None:
+            obs.pane = await self.analyzer.analyze_pane(frame.image)
+            # Pipeline verifies the pane title against the selected customer's aliases.
         self.last_status = obs.status
         if obs.ocr_performed:
             self.counters["ocr_frames"] += 1
@@ -510,7 +520,7 @@ class MonitorService:
                              verification: dict | None = None, sent: bool = False) -> None:
         async with self.db.transaction() as session:
             intent = await session.get(ReplyIntent, intent_id)
-            if intent is None:
+            if intent is None or intent.status == "superseded":
                 return
             intent.status = status
             if reason:
@@ -530,6 +540,8 @@ class MonitorService:
             challenge = (await get_state(session, state_keys.CHALLENGE)).get("active", False)
             last_sent = (await session.execute(select(ReplyIntent.sent_at).where(ReplyIntent.sent_at.is_not(None))
                                                .order_by(ReplyIntent.sent_at.desc()).limit(1))).scalar_one_or_none()
+        if intent is not None and intent.status == "superseded":
+            return "superseded"
         if intent is None or intent.status != "queued":
             await self.jobs.succeed(job, {"skipped": intent.status if intent else "missing"})
             return "skipped"
@@ -556,8 +568,44 @@ class MonitorService:
         async with self.desktop_lock:
             outcome = await executor.execute(target, rt, lambda phase: self.jobs.set_phase(job, phase),
                                              dry_run=bool(rt.dry_run))
+            details = await self._finish_reply(job, intent_id, outcome)
+            if outcome.clicked:
+                try:
+                    # Persist a newer incoming message BEFORE leaving the pane that proves its direction.
+                    await self._handle_frame_locked(await self.capture_backend.capture(), force_full=True)
+                    async def before_leave(frame, obs):
+                        image_path = self._save_frame(frame, obs.captured_at, rt, obs)
+                        result = await self.processor.process(obs, rt, image_path=image_path)
+                        self.counters["events"] += len(result.events)
+                        if result.jobs or result.intents:
+                            self.wake.set()
+
+                    parking = await executor.park(target, rt, before_leave=before_leave)
+                    details["parking"] = parking
+                    async with self.db.transaction() as session:
+                        row = await session.get(ReplyIntent, intent_id)
+                        if row is not None:
+                            row.verification = details
+                        record = await session.get(Job, job.id)
+                        if record is not None:
+                            record.result = {**(record.result or {}), "parking": parking}
+                    if parking.get("pause_replies"):
+                        await self.pause_replies("parking_target_unverified", f"intent {intent_id}")
+                except Exception:
+                    log.exception("post-reply observation/parking failed for intent %s", intent_id)
+                    await self.pause_replies("post_reply_observation_failed", f"intent {intent_id}")
+                finally:
+                    # Already queued pre-action screenshots are explicitly recorded as superseded.
+                    self.frame_watermark = utcnow()
+        return outcome.status
+
+    async def _finish_reply(self, job, intent_id, outcome) -> dict:
         details = {"status": outcome.status, "reason": outcome.reason, "clicked": outcome.clicked,
                    "typed": outcome.typed, **outcome.details}
+        async with self.db.session() as session:
+            intent = await session.get(ReplyIntent, intent_id)
+            if intent is not None and intent.status == "superseded":
+                return details
         if outcome.status == "dry_run":
             await self._update_intent(intent_id, "dry_run", outcome.reason, details)
             await self.jobs.succeed(job, details)
@@ -567,13 +615,19 @@ class MonitorService:
         elif outcome.status == "sent_unverified":
             await self._update_intent(intent_id, "sent_unverified", outcome.reason, details, sent=True)
             await self.jobs.mark_uncertain(job, outcome.reason, details)
-        else:
-            status = "failed" if outcome.clicked else "review"
-            await self._update_intent(intent_id, status, outcome.reason, details)
+        elif outcome.status == "superseded":
+            await self._update_intent(intent_id, "superseded", outcome.reason, details)
             await self.jobs.succeed(job, details)
+        else:
+            # A safe pre-send stop is an actionable review, not a failed delivery.
+            await self._update_intent(intent_id, "draft_review" if outcome.typed else "review", outcome.reason, details)
+            if outcome.typed:
+                await self.jobs.mark_uncertain(job, outcome.reason, details)
+            else:
+                await self.jobs.succeed(job, details)
         if outcome.pause_replies:
             await self.pause_replies(f"reply_{outcome.reason}"[:64], f"intent {intent_id}")
-        return outcome.status
+        return details
 
     # ----- heartbeat / retention -----
     async def publish_heartbeat(self, status: str | None = None) -> None:

@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
-import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -33,7 +32,8 @@ from xianyu_monitor.replies.input import InputAdapter, InputError
 from xianyu_monitor.runtime_settings import RuntimeSettings
 from xianyu_monitor.timeutil import utcnow
 from xianyu_monitor.vision.analyzer import FrameAnalyzer, PaneObservation
-from xianyu_monitor.vision.imageops import hamming
+from xianyu_monitor.vision.imageops import digest, hamming
+from xianyu_monitor.vision.pane import canonical_title
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class ReplyTarget:
 
 @dataclass
 class ReplyOutcome:
-    status: str  # sent_verified | sent_unverified | aborted | dry_run
+    status: str  # sent_verified | sent_unverified | superseded | aborted | dry_run
     reason: str
     pause_replies: bool = False
     clicked: bool = False
@@ -82,17 +82,13 @@ class ReplyExecutor:
 
     async def _pane(self, rt: RuntimeSettings, now) -> tuple[PaneObservation, str]:
         frame = await self.capture()
-        obs = await self.analyzer.analyze(frame, now(), rt.with_overrides(challenge_probe_every_n_frames=1),
-                                          force_full=True)
-        return await self.analyzer.analyze_pane(frame), obs.status
+        status = await self.analyzer.check_screen(frame, rt)
+        return await self.analyzer.analyze_pane(frame), status
 
     def _title_matches(self, pane: PaneObservation, target: ReplyTarget, rt: RuntimeSettings) -> bool:
         if pane.title_conf < float(rt.ocr_min_confidence):
             return False
-        title = normalize_name(pane.title)
-        # The page appends a masked account ID in parentheses. Remove only that
-        # explicit decoration, never accept an arbitrary display-name prefix.
-        title = re.sub(r"\([^()]*\*{2,}[^()]*\)$", "", title)
+        title = canonical_title(pane.title)
         return bool(title) and title in target.aliases
 
     def _composer_empty(self, pane: PaneObservation) -> bool:
@@ -133,7 +129,8 @@ class ReplyExecutor:
             if distance > int(rt.avatar_conflict_distance):
                 return ReplyOutcome("aborted", "target_avatar_conflict", details={"distance": distance})
         if row.preview_conf < min_conf or not _text_matches(row.preview, target.trigger_text, threshold):
-            return ReplyOutcome("aborted", "trigger_stale_or_unreadable", details={"preview": row.preview})
+            status = "superseded" if row.preview_conf >= min_conf else "aborted"
+            return ReplyOutcome(status, "trigger_stale_or_unreadable", details={"preview": row.preview})
 
         if dry_run:
             return ReplyOutcome("dry_run", "precheck_passed_no_input_sent", details={"row": row.index})
@@ -164,7 +161,7 @@ class ReplyExecutor:
             return ReplyOutcome("aborted", "latest_bubble_not_incoming", clicked=True,
                                 details={"direction": last.direction})
         if not _text_matches(last.text, target.trigger_text, threshold):
-            return ReplyOutcome("aborted", "latest_bubble_differs_from_trigger", clicked=True,
+            return ReplyOutcome("superseded", "latest_bubble_differs_from_trigger", clicked=True,
                                 details={"bubble": last.text})
         if not self._composer_empty(pane):
             return ReplyOutcome("aborted", "composer_not_empty_owner_may_be_typing", clicked=True)
@@ -214,7 +211,15 @@ class ReplyExecutor:
                 return ReplyOutcome("sent_unverified", "send_failure_or_target_changed", pause_replies=True,
                                     clicked=True, typed=True)
             newest = pane.last_bubble
-            verified = False
+            # Keep previously observed send evidence when a new incoming bubble
+            # arrives during verification. Still require that outgoing bubble
+            # to remain visible and check failure indicators on every sample.
+            matching_visible = any(
+                b.direction == "outgoing" and b.confidence >= min_conf
+                and normalize(b.text).replace(" ", "") == normalize(target.reply_text).replace(" ", "")
+                for b in pane.bubbles
+            )
+            verified = verified and matching_visible and self._composer_empty(pane)
             if newest is not None:
                 last_seen = {"direction": newest.direction, "text": newest.text, "bubbles": len(pane.bubbles)}
                 if (newest.direction == "outgoing" and newest.confidence >= min_conf
@@ -230,3 +235,46 @@ class ReplyExecutor:
                                 details={**last_seen, "bubbles_before": before_count})
         return ReplyOutcome("sent_unverified", "send_not_confirmed_within_timeout", pause_replies=True,
                             clicked=True, typed=True, details=last_seen)
+
+    async def park(self, target: ReplyTarget, rt: RuntimeSettings, now=utcnow, before_leave=None) -> dict:
+        """Leave the customer's pane using only a verified, excluded system conversation."""
+        if not self.analyzer.profile.park_system_conversation:
+            return {"parked": False, "reason": "parking_disabled"}
+        frame = await self.capture()
+        obs = await self.analyzer.analyze(frame, now(), rt, force_full=True)
+        if obs.status != "ok":
+            return {"parked": False, "reason": "screen_not_ready"}
+        pane = await self.analyzer.analyze_pane(frame)
+        if not self._title_matches(pane, target, rt) or not self._composer_empty(pane):
+            return {"parked": False, "reason": "owner_changed_target_or_draft_present"}
+        system_names = {normalize_name(name) for name in rt.system_conversation_names}
+        rows = [r for r in obs.rows if r.present and r.name_conf >= float(rt.ocr_min_confidence)
+                and normalize_name(r.name) in system_names and normalize_name(r.name) not in target.aliases]
+        # Duplicate system labels aren't a safe target either.
+        names = [normalize_name(r.name) for r in rows]
+        rows = [r for r in rows if names.count(normalize_name(r.name)) == 1]
+        if not rows:
+            return {"parked": False, "reason": "no_verified_system_row_visible"}
+        row = rows[0]
+        if before_leave is not None:
+            obs.pane = pane
+            await before_leave(frame, obs)
+        # OCR/SQL took time. Don't click an old row position if a burst reordered
+        # the list or changed the pane while we were deciding where to park.
+        latest = await self.capture()
+        regions = (self.analyzer.profile.conversation_list, self.analyzer.profile.message_pane,
+                   self.analyzer.profile.conversation_title)
+        if latest.size != frame.size or any(
+            digest(latest.crop(region)) != digest(frame.crop(region)) for region in regions if region is not None
+        ):
+            return {"parked": False, "reason": "screen_changed_during_parking"}
+        try:
+            await self.input.click(*self.analyzer.profile.row_center(row.index))
+            await self.sleep(float(rt.reply_step_delay_seconds))
+            pane, status = await self._pane(rt, now)
+        except InputError:
+            return {"parked": False, "reason": "parking_input_error", "pause_replies": True}
+        ok = (status == "ok" and pane.title_conf >= float(rt.ocr_min_confidence)
+              and canonical_title(pane.title) == normalize_name(row.name))
+        return {"parked": ok, "reason": "system_conversation_selected" if ok else "parking_target_unverified",
+                "pause_replies": not ok}

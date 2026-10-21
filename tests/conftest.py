@@ -45,4 +45,5 @@ def settings(tmp_path: Path, db_url: str) -> Settings:
 @pytest.fixture
 def rt() -> RuntimeSettings:
     return RuntimeSettings({"monitor_mode": "active", "notifications_enabled": True, "dry_run": False,
+                            "reply_debounce_seconds": 0,
                             "full_validation_every_n_frames": 1000, "challenge_probe_every_n_frames": 1})

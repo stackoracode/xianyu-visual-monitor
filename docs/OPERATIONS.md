@@ -28,7 +28,36 @@ banner: the absence of alerts then means nothing. `/healthz` returns `{"web": "o
 * The monitor never interacts with login or verification pages. Solve them yourself on the
   desktop or phone.
 
-## Recovery behavior
+## Bursts and the selected conversation
+
+Automatic reply jobs wait `reply_debounce_seconds` (default 3 seconds) before becoming
+eligible. A newer observed incoming message replaces older jobs for that customer while
+they are still before typing. Rules are evaluated against the latest observed preview;
+an unmatched or review-only newer question also cancels the older automatic response.
+The older intent is shown as `superseded`, not as a failed delivery. This does not
+reconstruct intermediate messages that were never visible to a capture.
+
+If the trigger changes after opening a conversation, no text is pasted. The worker
+samples the open pane again and plans from the newer incoming message. If it changes
+after pasting, Enter is withheld, the draft is retained (`draft_review`), and automatic
+replies pause for owner inspection. These drafts have no automatic resend action.
+After inspecting/clearing the draft on the seller desktop, review the latest intent
+and resume replies explicitly; do not re-submit an uncertain send without checking delivery.
+
+After a reply attempt that opened a customer, the worker samples that conversation
+before leaving. With `park_system_conversation` enabled in the calibration profile
+(default), it selects only a uniquely identified, visible excluded system conversation,
+then verifies its title. It never uses another customer as a parking target. An owner
+draft or unavailable system row prevents parking. Pixel changes before the parking
+click cancel that click. Make a system conversation visible to improve unread badges.
+
+The selected conversation is monitored even without a red badge: its title must match
+the identified customer, its latest bubble must have a confident incoming direction,
+and its text must agree with the row preview for automatic confidence. Persisted pane
+evidence detects observable bubble changes across restarts. Screenshots queued before
+a reply action are discarded as `superseded` rather than rolling back customer state.
+
+## Recovery table
 
 | Situation | What happens |
 |---|---|

@@ -18,11 +18,21 @@ from xianyu_monitor.timeutil import utcnow
 from xianyu_monitor.worker.service import MonitorService, WorkerAlreadyRunning
 
 
+async def add_burst_rules(db):
+    async with db.transaction() as s:
+        for name, pattern, text in [("available", "还在吗", "在的"), ("shipping", "多久发货", "发货需卖家确认")]:
+            s.add(KeywordRule(name=name, enabled=True, priority=100, match_type="contains", match_mode="any",
+                              patterns=[pattern], exclude_patterns=[], template=text, cooldown_seconds=0,
+                              scope="all", allow_sensitive=True, requires_review=False,
+                              created_at=utcnow(), updated_at=utcnow()))
+
+
 async def configure(db, h: Harness, **runtime):
     async with db.transaction() as s:
         s.add(CalibrationProfile(name="synthetic", data=h.profile_dict, active=True, created_by="test"))
         await save_runtime(s, {"full_validation_every_n_frames": 1000, "challenge_probe_every_n_frames": 1,
                                "capture_interval_seconds": 1.0, "reply_step_delay_seconds": 0.1,
+                               "reply_debounce_seconds": 0,
                                "reply_verify_timeout_seconds": 1.0, "reply_global_min_interval_seconds": 0,
                                **runtime}, "test")
 
@@ -207,3 +217,144 @@ async def test_run_and_graceful_shutdown(db, settings):
     await other.release_lease()
     if other._lock:
         other._lock.release()
+
+async def test_selected_pane_detects_repeated_input_without_badge_and_survives_restart(db, settings):
+    h = Harness()
+    await configure(db, h, monitor_mode="baseline", reply_mode="auto", reply_send_enabled=True, dry_run=False)
+    await add_burst_rules(db)
+    rows = [SRow("买家甲", "还在吗", "刚刚", avatar=1, selected=True)]
+    desk = FakeDesktop(h, rows, {"买家甲": [SBubble("incoming", "还在吗")]})
+    service = make_service(settings, db, h, desk.capture, input_factory=lambda: desk)
+    await service.start(use_file_lock=False)
+    await service.handle_frame(await service.capture_backend.capture())
+    async with db.transaction() as s:
+        await save_runtime(s, {"monitor_mode": "active"}, "test")
+    await service.runtime(max_age=0)
+    desk.history["买家甲"].append(SBubble("incoming", "还在吗"))
+    await service.handle_frame(await service.capture_backend.capture())
+    async with db.session() as s:
+        first = (await s.execute(select(ReplyIntent))).scalars().all()
+        assert len(first) == 1 and first[0].status == "queued"
+    service.analyzer.reset()
+    await service.handle_frame(await service.capture_backend.capture())
+    async with db.session() as s:
+        assert len((await s.execute(select(ReplyIntent))).scalars().all()) == 1
+    desk.history["买家甲"].append(SBubble("incoming", "还在吗"))
+    await service.handle_frame(await service.capture_backend.capture())
+    async with db.session() as s:
+        statuses = list((await s.execute(select(ReplyIntent.status).order_by(ReplyIntent.id))).scalars())
+        assert statuses == ["superseded", "queued"]
+    assert all(row.badge is None for row in rows)
+    await service.release_lease()
+
+
+async def test_new_input_during_targeting_replans_then_parks_and_never_sends_old_reply(db, settings):
+    h = Harness()
+    await configure(db, h, monitor_mode="baseline", reply_mode="auto", reply_send_enabled=True, dry_run=False)
+    await add_burst_rules(db)
+    rows = [SRow("买家甲", "旧消息", "10-11", avatar=1), SRow("闲小蜜", "通知", avatar=2)]
+    desk = FakeDesktop(h, rows, {"买家甲": [SBubble("incoming", "旧消息")],
+                                  "闲小蜜": [SBubble("incoming", "通知")]})
+    service = make_service(settings, db, h, desk.capture, input_factory=lambda: desk)
+    await service.start(use_file_lock=False)
+    await service.handle_frame(await service.capture_backend.capture())
+    async with db.transaction() as s:
+        await save_runtime(s, {"monitor_mode": "active"}, "test")
+    await service.runtime(max_age=0)
+    rows[0].preview, rows[0].badge, rows[0].time = "还在吗", 1, "刚刚"
+    desk.history["买家甲"].append(SBubble("incoming", "还在吗"))
+    await service.handle_frame(await service.capture_backend.capture())
+    queued_old_frame = await service.capture_backend.capture()
+    click = desk.click
+    injected = False
+
+    async def incoming_on_first_open(x, y):
+        nonlocal injected
+        await click(x, y)
+        if desk.selected == 0 and not injected:
+            injected = True
+            rows[0].preview = "多久发货"
+            desk.history["买家甲"].append(SBubble("incoming", "多久发货"))
+
+    desk.click = incoming_on_first_open
+    await drain_jobs(service, "reply")
+    assert not any(a[0] == "type" for a in desk.actions)
+    assert desk.selected == 1
+    async with db.session() as s:
+        intents = (await s.execute(select(ReplyIntent).order_by(ReplyIntent.id))).scalars().all()
+        assert [(i.trigger_text, i.status) for i in intents] == [("还在吗", "superseded"), ("多久发货", "queued")]
+    stale = await service.handle_frame(queued_old_frame)
+    assert stale.status == "superseded" and service.counters["superseded_frames"] == 1
+    await drain_jobs(service, "reply")
+    assert ("type", "在的") not in desk.actions
+    assert desk.actions.count(("type", "发货需卖家确认")) == 1
+    assert desk.selected == 1
+    async with db.session() as s:
+        statuses = list((await s.execute(select(ReplyIntent.status).order_by(ReplyIntent.id))).scalars())
+        assert statuses == ["superseded", "sent_verified"]
+        parked = (await s.execute(select(ReplyIntent).where(ReplyIntent.status == "sent_verified"))).scalar_one()
+        assert parked.verification["parking"]["parked"]
+    await service.release_lease()
+
+async def test_arrival_after_paste_preserves_draft_and_requires_review_without_enter(db, settings):
+    h = Harness()
+    await configure(db, h, monitor_mode="baseline", reply_mode="auto", reply_send_enabled=True, dry_run=False)
+    await add_burst_rules(db)
+    rows = [SRow("买家甲", "旧消息", "10-11", avatar=1), SRow("闲小蜜", "通知", avatar=2)]
+    desk = FakeDesktop(h, rows, {"买家甲": [SBubble("incoming", "旧消息")], "闲小蜜": []})
+    service = make_service(settings, db, h, desk.capture, input_factory=lambda: desk)
+    await service.start(use_file_lock=False)
+    await service.handle_frame(await service.capture_backend.capture())
+    async with db.transaction() as s:
+        await save_runtime(s, {"monitor_mode": "active"}, "test")
+    await service.runtime(max_age=0)
+    rows[0].preview, rows[0].badge, rows[0].time = "还在吗", 1, "刚刚"
+    desk.history["买家甲"].append(SBubble("incoming", "还在吗"))
+    await service.handle_frame(await service.capture_backend.capture())
+    type_text = desk.type_text
+
+    async def incoming_after_paste(text):
+        await type_text(text)
+        rows[0].preview = "多久发货"
+        desk.history["买家甲"].append(SBubble("incoming", "多久发货"))
+
+    desk.type_text = incoming_after_paste
+    await drain_jobs(service, "reply")
+    assert ("press", "Return") not in desk.actions
+    assert desk.composer == "在的" and desk.selected == 0
+    async with db.session() as s:
+        intents = (await s.execute(select(ReplyIntent).order_by(ReplyIntent.id))).scalars().all()
+        assert [i.status for i in intents] == ["draft_review", "review"]
+        assert (await s.get(Job, intents[0].job_id)).status == "uncertain"
+        assert (await get_state(s, state_keys.REPLY_PAUSE))["paused"]
+    await service.release_lease()
+
+
+async def test_capture_waits_for_desktop_input_lock(db, settings):
+    h = Harness()
+    service = make_service(settings, db, h, lambda: h.render(Scene()))
+    async with service.desktop_lock:
+        pending = asyncio.create_task(service.capture_once(service.rt))
+        await asyncio.sleep(0)
+        assert service.frames.qsize() == 0 and not pending.done()
+    await pending
+    assert service.frames.qsize() == 1
+
+
+async def test_title_mismatch_does_not_use_another_conversations_direction(db, settings):
+    h = Harness()
+    await configure(db, h, monitor_mode="baseline", reply_mode="auto", reply_send_enabled=True, dry_run=False)
+    await add_burst_rules(db)
+    scene = Scene(rows=[SRow("买家甲", "旧消息", "10-11", avatar=1, selected=True)],
+                  title="其他人", bubbles=[SBubble("incoming", "还在吗")])
+    service = make_service(settings, db, h, lambda: h.render(scene))
+    await service.start(use_file_lock=False)
+    await service.handle_frame(await service.capture_backend.capture())
+    async with db.transaction() as s:
+        await save_runtime(s, {"monitor_mode": "active"}, "test")
+    await service.runtime(max_age=0)
+    scene.rows[0].preview, scene.rows[0].time = "还在吗", "刚刚"
+    await service.handle_frame(await service.capture_backend.capture())
+    async with db.session() as s:
+        assert not (await s.execute(select(ReplyIntent))).scalars().all()
+    await service.release_lease()

@@ -67,6 +67,7 @@ against your own frames.
 | `overall_unread_badge` | Informational only. |
 | `conversation_title`, `message_pane`, `composer`, `composer_click`, `composer_placeholder` | Required for replies and for direction checks on the open conversation. |
 | `challenge_probe` | Region OCR'd for login/verification keywords. |
+| `park_system_conversation` | Default `true`: after a reply, leave the customer via a uniquely verified visible system conversation. No fallback to another customer. |
 | `anchors` | Regions that look the same in the normal layout (list header, site logo). Their `dhash` is captured from a known-good frame. |
 | `colors` | Measured from reference frames (16-bit color): badge red ≈ (248,76,72), selected row ≈ (232,236,232), incoming bubble ≈ (240,240,240), outgoing bubble ≈ (248,228,8), pane background ≈ (248,252,248). |
 
@@ -112,3 +113,8 @@ state, not recipient delivery; real error-icon calibration remains a controlled 
 
 Rules imported with `xianyu-monitor import-rules` are disabled unless `--keep-enabled` is given.
 Use the rule tester on the Rules page before enabling anything.
+
+`reply_debounce_seconds` (0–30, default 3) delays automatic jobs to coalesce bursts.
+A newer observed incoming message supersedes safe, untyped jobs even if its text has
+no matching rule. Only the latest observed preview is evaluated; intermediate hidden
+messages cannot be reconstructed. See [burst handling](OPERATIONS.md#bursts-and-the-selected-conversation).

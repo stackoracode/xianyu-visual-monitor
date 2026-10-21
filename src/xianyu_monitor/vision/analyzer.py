@@ -62,6 +62,7 @@ class FrameObservation:
     overall_unread: int | None = None
     rows: list[RowObservation] = field(default_factory=list)
     challenge_hits: list[str] = field(default_factory=list)
+    pane: PaneObservation | None = None
 
     @property
     def usable(self) -> bool:
@@ -194,6 +195,10 @@ class FrameAnalyzer:
         signature = "|".join(imageops.digest(img) for img in row_imgs)
         if self.profile.overall_unread_badge is not None:
             signature += "|" + imageops.digest(imageops.crop(frame, self.profile.overall_unread_badge))
+        # An open conversation may receive messages without ever showing a row badge.
+        for region in (self.profile.message_pane, self.profile.conversation_title):
+            if region is not None:
+                signature += "|" + imageops.digest(imageops.crop(frame, region))
         full_due = self.frame_counter % max(1, int(rt.full_validation_every_n_frames)) == 0
         if (self._last is not None and not force_full and not full_due and signature == self._prev_signature):
             obs = replace(self._last, captured_at=captured_at, status="unchanged", changed=False,
@@ -282,6 +287,13 @@ class FrameAnalyzer:
             if needle and needle in text:
                 hits.append(keyword)
         return hits
+
+    async def check_screen(self, frame: Image.Image, rt: RuntimeSettings) -> str:
+        """Validate input safety without re-OCRing every unchanged list field."""
+        status, _ = self.check_layout(frame)
+        if self.profile.challenge_probe is not None and await self._probe_challenge(frame, rt):
+            return "challenge"
+        return status
 
     def probe_crop(self, frame: Image.Image) -> Image.Image | None:
         if self.profile.challenge_probe is None:

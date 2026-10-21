@@ -7,11 +7,17 @@ bubble direction is ``unknown``. Colors are calibration values, not constants.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from PIL import Image
 
+from xianyu_monitor.detection.textnorm import normalize_name
 from xianyu_monitor.vision.profile import Box, Colors
+
+
+def canonical_title(text: str) -> str:
+    return re.sub(r"\([^()]*\*{2,}[^()]*\)$", "", normalize_name(text))
 
 
 @dataclass
