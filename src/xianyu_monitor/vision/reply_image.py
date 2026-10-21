@@ -50,10 +50,10 @@ COARSE_STEP = 2
 # a full-resolution score above the threshold does not fall this far at half resolution
 # (tested against the exhaustive search in tests/test_image_matcher.py).
 COARSE_MARGIN = 0.2
-# Widths far below the best coarse score cannot hold the best full-resolution match.
-RELATIVE_MARGIN = 0.1
+SEED_PEAKS = 4  # coarse local maxima from which the exact score is climbed
+CLIMB_RADIUS = 2  # neighbors examined per climbing step (tolerates 1 px ripples from rounding)
 _THUMBS: OrderedDict[tuple, object] = OrderedDict()
-_THUMB_CACHE_SIZE = 96
+_THUMB_CACHE_SIZE = 160
 
 
 def _reference_key(reference: Image.Image) -> str:
@@ -90,9 +90,9 @@ def _template_geometry(width: int, ratio: float, pane_height: int) -> tuple[int,
     return height, 0, height
 
 
-def _score_width(np, cv2, search, gray, reference, width, ratio, pane, threshold, thumb_of):
-    """The exhaustive search's per-width step, unchanged: LANCZOS thumbnail, normalized
-    correlation on gray, right-half candidate mask, mean color difference check."""
+def _raw_score(np, cv2, gray, width, ratio, pane, thumb_of):
+    """Best normalized correlation for one width (before acceptance), or ``None`` when the
+    width cannot be evaluated. Identical to the exhaustive search's per-width scoring."""
     left, top, right, bottom = pane
     geometry = _template_geometry(width, ratio, bottom - top)
     if geometry is None:
@@ -111,14 +111,27 @@ def _score_width(np, cv2, search, gray, reference, width, ratio, pane, threshold
     minimum_x = max(0, int((right - left) / 2 - width / 2))
     scores[:, :minimum_x] = -1
     _, score, _, pos = cv2.minMaxLoc(scores)
+    return float(score), pos, thumb, height
+
+
+def _accept(np, search, width, raw, pane, threshold) -> ImageMatch | None:
+    if raw is None:
+        return None
+    score, (x, y), thumb, height = raw
     if score < threshold:
         return None
-    x, y = pos
     actual = search[y:y + height, x:x + width].astype(float)
     # Also require color agreement: correlation alone accepts wrong, dark thumbnails.
     if float(np.abs(actual - thumb.astype(float)).mean()) > 20:
         return None
-    return ImageMatch((left + x, top + y, left + x + width, top + y + height), float(score))
+    left, top = pane[0], pane[1]
+    return ImageMatch((left + x, top + y, left + x + width, top + y + height), score)
+
+
+def _score_width(np, cv2, search, gray, reference, width, ratio, pane, threshold, thumb_of):
+    """The exhaustive search's per-width step: LANCZOS thumbnail, normalized correlation on
+    gray, right-half candidate mask, mean color difference check."""
+    return _accept(np, search, width, _raw_score(np, cv2, gray, width, ratio, pane, thumb_of), pane, threshold)
 
 
 def find_outgoing_image_exhaustive(frame: Image.Image, reference: Image.Image, pane,
@@ -143,9 +156,9 @@ def find_outgoing_image_exhaustive(frame: Image.Image, reference: Image.Image, p
     return best
 
 
-def _coarse_widths(np, cv2, gray, reference, ref_key, widths, ratio, pane, threshold) -> list[int]:
-    """Screen all widths on 2x-downsampled images; return widths that still need the exact
-    full-resolution check (neighbors of every promising coarse width)."""
+def _coarse_scores(np, cv2, gray, reference, ref_key, widths, ratio, pane) -> dict[int, float | None]:
+    """Normalized correlation of every ``COARSE_STEP``-th width on 2x-downsampled images.
+    ``None`` marks widths too small or flat to screen at half resolution."""
     left, top, right, bottom = pane
     half = cv2.resize(gray, (max(1, gray.shape[1] // 2), max(1, gray.shape[0] // 2)), interpolation=cv2.INTER_AREA)
     work_width = min(reference.width, 2 * MAX_WIDTH)
@@ -170,26 +183,18 @@ def _coarse_widths(np, cv2, gray, reference, ref_key, widths, ratio, pane, thres
             _, value, _, _ = cv2.minMaxLoc(scores)
             score = float(value) if np.isfinite(value) else None
         coarse[width] = score
-    screened = [v for v in coarse.values() if v is not None]
-    floor = threshold - COARSE_MARGIN
-    if screened:
-        floor = max(floor, max(screened) - RELATIVE_MARGIN)
-    keep: set[int] = set()
-    lowest, highest = widths[0], widths[-1]
-    for width, score in coarse.items():
-        if score is None or score >= floor:
-            keep.update(range(max(lowest, width - COARSE_STEP), min(highest, width + COARSE_STEP) + 1))
-    return sorted(keep)
+    return coarse
 
 
 def find_outgoing_image(frame: Image.Image, reference: Image.Image, pane, threshold=0.92) -> ImageMatch | None:
     """Fast equivalent of :func:`find_outgoing_image_exhaustive`.
 
-    A half-resolution screen discards widths that cannot reach the threshold or are far
-    below the best coarse score; surviving widths get exactly the exhaustive per-width check
-    (same LANCZOS thumbnails, scores, masks and color test, in the same order). Acceptance is
-    therefore never looser than the exhaustive search. Equality of the selected box/score is
-    checked by parity tests and by ``xianyu-monitor benchmark --reference`` on real frames.
+    A half-resolution screen finds promising widths; from the strongest coarse peaks the
+    exact full-resolution score is climbed width by width. Every evaluated width gets exactly
+    the exhaustive per-width check (same LANCZOS thumbnail, score, masks and color test) and
+    the same selection rule, so acceptance is never looser than the exhaustive search.
+    Equality of the selected box/score is checked by parity tests and by
+    ``xianyu-monitor benchmark --reference`` on real frames.
     Thumbnails are cached per reference image across the repeated verification calls.
     """
     # Imported only by the desktop worker. Minimal web installs do not need the OCR stack.
@@ -209,9 +214,54 @@ def find_outgoing_image(frame: Image.Image, reference: Image.Image, pane, thresh
         return _cached((ref_key, "thumb", width, height), lambda: np.asarray(
             reference.resize((width, height), Image.Resampling.LANCZOS)))
 
+    coarse = _coarse_scores(np, cv2, gray, reference, ref_key, widths, ratio, pane)
+    raw: dict[int, object] = {}
+
+    def exact(width: int):
+        if width not in raw:
+            raw[width] = _raw_score(np, cv2, gray, width, ratio, pane, thumb_of)
+        value = raw[width]
+        return value[0] if value is not None else float("-inf")
+
+    floor = threshold - COARSE_MARGIN
+    ordered = list(coarse)
+    peaks = []
+    for i, width in enumerate(ordered):
+        score = coarse[width]
+        if score is None:
+            exact(width)  # unscreenable: decide with the exact check
+            continue
+        neighbors = [coarse[ordered[j]] for j in (i - 1, i + 1) if 0 <= j < len(ordered)]
+        if score >= floor and all(n is None or score >= n for n in neighbors):
+            peaks.append((score, width))
+    # Climb the exact full-resolution score from the strongest coarse peaks. Real thumbnails
+    # give a broad coarse plateau; the exact score peaks sharply at the displayed width.
+    for _, seed in sorted(peaks, reverse=True)[:SEED_PEAKS]:
+        current = seed
+        while True:
+            span = range(max(widths[0], current - CLIMB_RADIUS), min(widths[-1], current + CLIMB_RADIUS) + 1)
+            best_width = max(span, key=lambda w: (exact(w), -w))
+            if best_width == current:
+                break
+            current = best_width
+    best = _select(np, search, raw, pane, threshold)
+    if best is None and any(v is not None and v[0] >= threshold for v in raw.values()):
+        # A correlation peak failed the color test: the exhaustive search would fall back to
+        # another width, so evaluate every promising width as it does.
+        for width, score in coarse.items():
+            if score is None or score >= floor:
+                for w in range(max(widths[0], width - COARSE_STEP), min(widths[-1], width + COARSE_STEP) + 1):
+                    exact(w)
+        best = _select(np, search, raw, pane, threshold)
+    return best
+
+
+def _select(np, search, raw, pane, threshold) -> ImageMatch | None:
+    """The exhaustive search's choice restricted to evaluated widths: highest accepted score,
+    the smallest width winning ties."""
     best = None
-    for width in _coarse_widths(np, cv2, gray, reference, ref_key, widths, ratio, pane, threshold):
-        match = _score_width(np, cv2, search, gray, reference, width, ratio, pane, threshold, thumb_of)
+    for width in sorted(raw):
+        match = _accept(np, search, width, raw[width], pane, threshold)
         if match is not None and (best is None or match.score > best.score):
             best = match
     return best

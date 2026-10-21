@@ -18,7 +18,7 @@ the whole `reply_verify_timeout_seconds`, and image evidence. The changes only a
 | Raw pixels to the OCR process | `ocr/pool.py` | PNG encode/decode is lossless, so sending raw pixels gives byte-identical input with less CPU. |
 | OCR process pinned to the A76 cores (`XVM_OCR_CPU_AFFINITY=auto`), one ONNX Runtime thread per core | `cpu.py`, `ocr/pool.py` | Scheduling only. By default ONNX Runtime splits each operator across all 8 cores, and the slower A55 cores hold back every step. |
 | Connected components via OpenCV | `vision/pane.py` | Same 4-connected components, boxes and pixel counts as the pure-Python flood fill (kept as fallback). Parity tests cover both. |
-| Outgoing-image matcher: half-resolution screen, then the exact per-width check, thumbnails cached | `vision/reply_image.py` | Surviving widths go through the original LANCZOS/normalized correlation/color check unchanged, so acceptance is never looser. Parity tests compare it with the exhaustive search, and `benchmark --reference` repeats that on your frames. |
+| Outgoing-image matcher: half-resolution screen, then a climb on the exact full-resolution score from the strongest coarse peaks, thumbnails cached | `vision/reply_image.py` | Every evaluated width goes through the original LANCZOS/normalized correlation/color check and selection rule unchanged, so acceptance is never looser. If a correlation peak fails the color test, all promising widths are evaluated, as the exhaustive search would. Parity tests compare it with the exhaustive search, and `benchmark --reference` repeats that on your frames. |
 | Fewer full-frame RGB copies | `vision/analyzer.py` | Crop-then-convert equals convert-then-crop. |
 
 Proposals from #19 that were **not** adopted, because they would weaken a check:
@@ -35,6 +35,22 @@ Proposals from #19 that were **not** adopted, because they would weaken a check:
   unchanged latest incoming bubble (issue #16). With the cache those crops are not re-read
   unless their pixels changed, so the check stays complete.
 * **Chrome DevTools/DOM inspection.** Out of scope: the project reads screenshots only.
+
+## Measured on the board (#25)
+
+LubanCat-4 RK3588, profile 4 (1280x1440, 18 rows), RapidOCR in a process pinned to CPUs 4–7, 4 threads:
+
+| Stage | Uncached | With #20 |
+| --- | --- | --- |
+| Full list analysis | 8.8–12.9 s | 43–55 ms (identical pixels) |
+| Pane analysis | 1.3–3.0 s | 12–19 ms (identical pixels) |
+| Image matcher, image absent | 15.4 s | 0.5 s |
+| Image matcher, image present | 15.4 s | 12.9–13.4 s with the first screen version; replaced by the exact-score climb, to be re-measured |
+| Full safety-probe read | 8.4–12.7 s | unchanged when it must run (first read, large change); see #23 |
+
+All agreement checks were true (`fresh_reads_identical`, `cached_matches_fresh`,
+`image_match_identical`, `probe_incremental_matches_full`). The first read of changed content
+remains expensive: the detector input sizes in #23 and an NPU backend (#24) are the next steps.
 
 ## Measuring on the board
 

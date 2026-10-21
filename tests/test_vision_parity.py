@@ -163,21 +163,42 @@ def test_fast_image_matcher_equals_exhaustive_search(seed, width, resample, dist
     assert fast.score == pytest.approx(slow.score, abs=1e-9)
 
 
-def test_fast_matcher_evaluates_far_fewer_widths(monkeypatch):
+@pytest.mark.parametrize("grain,weight", [(3, 0.6), (6, 0.35)])
+def test_fast_matcher_evaluates_far_fewer_widths(monkeypatch, grain, weight):
+    """Smooth photos give a broad coarse plateau (the case measured on the board in #25);
+    the exact-score climb must still evaluate only a small fraction of the 281 widths."""
     from xianyu_monitor.vision import reply_image
 
-    ref = photo(1, grain=3, detail_weight=0.6)  # product-photo-like detail gives a sharp scale peak
+    ref = photo(1, grain=grain, detail_weight=weight)
     frame, box = chat(1, ref, 150, Image.Resampling.LANCZOS)
     calls = []
-    real = reply_image._score_width
+    real = reply_image._raw_score
 
     def counting(*args):
-        calls.append(args[5])
+        calls.append(args[3])
         return real(*args)
 
-    monkeypatch.setattr(reply_image, "_score_width", counting)
-    assert reply_image.find_outgoing_image(frame, ref, box, 0.92) is not None
-    assert len(calls) < 100  # the exhaustive search evaluates all 281 widths
+    monkeypatch.setattr(reply_image, "_raw_score", counting)
+    found = reply_image.find_outgoing_image(frame, ref, box, 0.92)
+    monkeypatch.setattr(reply_image, "_raw_score", real)
+    assert found is not None
+    assert found.box == reply_image.find_outgoing_image_exhaustive(frame, ref, box, 0.92).box
+    assert len(set(calls)) < 45, len(set(calls))
+
+
+def test_color_mismatch_at_the_correlation_peak_falls_back_to_all_promising_widths():
+    """An inverted-brightness copy correlates but fails the color test, like the exhaustive search."""
+    from PIL import ImageOps
+
+    from xianyu_monitor.vision import reply_image
+
+    ref = photo(3, grain=3, detail_weight=0.6)
+    frame, box = chat(3, ImageOps.autocontrast(ref, cutoff=20), 180, Image.Resampling.LANCZOS)
+    slow = reply_image.find_outgoing_image_exhaustive(frame, ref, box, 0.92)
+    fast = reply_image.find_outgoing_image(frame, ref, box, 0.92)
+    assert (slow is None) == (fast is None)
+    if slow is not None:
+        assert fast.box == slow.box
 
 
 @pytest.mark.parametrize("seed,width", [(21, 96), (22, 158), (23, 211), (24, 287), (25, 349)])
