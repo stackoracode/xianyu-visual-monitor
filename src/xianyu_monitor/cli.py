@@ -250,6 +250,38 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def _benchmark_image_matches(frame, reference, profile) -> dict:
+    """Measure both cache states and check each result against the exhaustive oracle."""
+    import time
+
+    from xianyu_monitor.vision.reply_image import (
+        clear_thumbnail_cache,
+        find_outgoing_image,
+        find_outgoing_image_exhaustive,
+    )
+
+    def measure(matcher):
+        started = time.perf_counter()
+        result = matcher(frame, reference, profile.message_pane, profile.image_match_threshold)
+        return result, round((time.perf_counter() - started) * 1000.0, 1)
+
+    def identical(expected, actual):
+        return (expected is None and actual is None) or (
+            expected is not None and actual is not None and expected.box == actual.box
+            and abs(expected.score - actual.score) < 1e-6)
+
+    clear_thumbnail_cache()
+    slow, exhaustive_ms = measure(find_outgoing_image_exhaustive)
+    cold, cold_ms = measure(find_outgoing_image)
+    warm, warm_ms = measure(find_outgoing_image)
+    cold_ok, warm_ok = identical(slow, cold), identical(slow, warm)
+    return {"image_match_exhaustive_ms": exhaustive_ms,
+            "image_match_fast_cold_ms": cold_ms, "image_match_fast_warm_ms": warm_ms,
+            "image_match_found": slow is not None,
+            "image_match_cold_identical": cold_ok, "image_match_warm_identical": warm_ok,
+            "image_match_identical": cold_ok and warm_ok}
+
+
 def cmd_benchmark(args: argparse.Namespace) -> int:
     """Time analysis stages on private screenshots and check that the optimizations agree
     with fresh/exhaustive results. Prints timings and booleans only, never text or pixels."""
@@ -339,27 +371,10 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
                                                            else "full")
                         entry["probe_incremental_matches_full"] = sorted(hits) == sorted(full_hits)
                 if args.reference and profile.message_pane is not None:
-                    from xianyu_monitor.vision.reply_image import (
-                        find_outgoing_image,
-                        find_outgoing_image_exhaustive,
-                        load_asset,
-                    )
+                    from xianyu_monitor.vision.reply_image import load_asset
 
                     reference = load_asset(str(Path(args.reference).resolve())).image
-                    started = time.perf_counter()
-                    slow = find_outgoing_image_exhaustive(frame, reference, profile.message_pane,
-                                                          profile.image_match_threshold)
-                    entry["image_match_exhaustive_ms"] = ms(started)
-                    started = time.perf_counter()
-                    fast = find_outgoing_image(frame, reference, profile.message_pane, profile.image_match_threshold)
-                    entry["image_match_fast_cold_ms"] = ms(started)
-                    started = time.perf_counter()
-                    find_outgoing_image(frame, reference, profile.message_pane, profile.image_match_threshold)
-                    entry["image_match_fast_warm_ms"] = ms(started)
-                    entry["image_match_found"] = slow is not None
-                    entry["image_match_identical"] = (slow is None and fast is None) or (
-                        slow is not None and fast is not None and slow.box == fast.box
-                        and abs(slow.score - fast.score) < 1e-6)
+                    entry.update(_benchmark_image_matches(frame, reference, profile))
                 report["frames"].append(entry)
                 previous = frame
             report["ocr_cache"] = cached.stats()

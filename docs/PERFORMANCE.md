@@ -45,12 +45,19 @@ LubanCat-4 RK3588, profile 4 (1280x1440, 18 rows), RapidOCR in a process pinned 
 | Full list analysis | 8.8–12.9 s | 43–55 ms (identical pixels) |
 | Pane analysis | 1.3–3.0 s | 12–19 ms (identical pixels) |
 | Image matcher, image absent | 15.4 s | 0.5 s |
-| Image matcher, image present | 15.4 s | 12.9–13.4 s with the first screen version; replaced by the exact-score climb, to be re-measured |
+| Image matcher, image present | 15.30–15.36 s | Exact-score climb: 1.96–1.99 s cold, 0.833–0.843 s warm |
 | Full safety-probe read | 8.4–12.7 s | unchanged when it must run (first read, large change); see #23 |
 
 All agreement checks were true (`fresh_reads_identical`, `cached_matches_fresh`,
 `image_match_identical`, `probe_incremental_matches_full`). The first read of changed content
 remains expensive: the detector input sizes in #23 and an NPU backend (#24) are the next steps.
+
+The visible-image matcher was re-measured on the board after merging #20 (`fd3eea8`).
+Two isolated runs used the same private 1280x1440 frame from #25, the calibrated 650x272
+message pane and the original reference asset. The extended benchmark in #26 also checked
+the warm result: `image_match_found`, `image_match_cold_identical`, `image_match_warm_identical`
+and aggregate `image_match_identical` were all true. These measurements validate that frame;
+they do not prove equality on every possible image or resolve the novelty issue #21.
 
 ## Measuring on the board
 
@@ -58,7 +65,7 @@ Save a few screenshots locally (they stay private), for example the list, an ope
 before and after pasting a draft, and after sending. Then run:
 
 ```bash
-sudo -u xvm env XVM_ENV_FILE=/etc/xianyu-monitor/monitor.env /opt/xianyu-monitor/env/bin/xianyu-monitor \
+XVM_ENV_FILE=/etc/xianyu-monitor/monitor.env /root/miniconda3/envs/xianyu-monitor/bin/xianyu-monitor \
   benchmark --profile profile.json --processes before.png after.png [--reference /path/reply.png]
 ```
 
@@ -68,6 +75,14 @@ The JSON output contains only timings and booleans:
 * `fresh_reads_identical`: OCR reads of the same pixels agree.
 * `probe_full_ms` and `probe_incremental_ms`, plus `probe_incremental_matches_full`.
 * `image_match_exhaustive_ms` and `image_match_fast_*_ms`, plus `image_match_identical`.
+
+Run from `/root/02project/01xianyumonitor` on the current Conda deployment. Select a frame
+where the reference image is visible **inside the profile's message pane** and confirm
+`image_match_found: true`; agreement on absence alone does not validate the visible-image path.
+Each frame starts with an empty thumbnail cache. `image_match_cold_identical` and
+`image_match_warm_identical` check both calls against the exhaustive result (box and score);
+`image_match_identical` requires both to agree. Stop the worker during timing to avoid
+competing OCR, and restore it when finished. Keep frames and profiles private.
 
 Repeat with `--cpus none` to compare pinning. Every `phase_seconds` entry of a reply's
 verification JSON (Replies page) shows where time is spent, and the heartbeat reports OCR cache
