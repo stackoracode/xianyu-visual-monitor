@@ -771,6 +771,8 @@ class MonitorService:
             "detect_latency_ms_p50": round(statistics.median(self.latencies), 1) if self.latencies else None,
             "detect_latency_ms_p95": p(self.latencies, 0.95),
             "capture": self.capture_backend.describe(),
+            "ocr": self.ocr.stats() if hasattr(self.ocr, "stats") else None,
+            "safety_probe": dict(self.analyzer.probe_stats) if self.analyzer is not None else None,
         }
         async with self.db.transaction() as session:
             await set_state(session, state_keys.HEARTBEAT, payload)

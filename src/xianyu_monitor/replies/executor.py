@@ -102,7 +102,29 @@ class ReplyExecutor:
     async def execute(self, target: ReplyTarget, rt: RuntimeSettings, set_phase: PhaseFn,
                       now: Callable[[], dt.datetime] = utcnow, dry_run: bool = False) -> ReplyOutcome:
         """Run the reply sequence. ``dry_run`` performs the read-only precheck and stops
-        before any click, so it never opens the conversation or marks it read."""
+        before any click, so it never opens the conversation or marks it read.
+
+        The outcome records how long each phase took (``phase_seconds``) so latency can be
+        measured on the board without screenshots or message text."""
+        marks: list[tuple[str, float]] = []
+
+        async def timed_phase(phase: str) -> bool:
+            marks.append((phase, self.monotonic()))
+            return await set_phase(phase)
+
+        started = self.monotonic()
+        outcome = await self._execute(target, rt, timed_phase, now, dry_run)
+        finished = self.monotonic()
+        seconds: dict[str, float] = {}
+        for i, (phase, at) in enumerate(marks):
+            end = marks[i + 1][1] if i + 1 < len(marks) else finished
+            seconds[phase] = round(seconds.get(phase, 0.0) + end - at, 3)
+        outcome.details.setdefault("phase_seconds", seconds)
+        outcome.details.setdefault("elapsed_seconds", round(finished - started, 3))
+        return outcome
+
+    async def _execute(self, target: ReplyTarget, rt: RuntimeSettings, set_phase: PhaseFn,
+                       now: Callable[[], dt.datetime], dry_run: bool) -> ReplyOutcome:
         profile = self.analyzer.profile
         threshold = float(rt.reply_text_match_similarity)
         min_conf = float(rt.ocr_min_confidence)

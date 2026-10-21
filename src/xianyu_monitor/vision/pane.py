@@ -31,19 +31,30 @@ def _matches(pixel: tuple[int, int, int], target: tuple[int, int, int], tol: int
     return abs(pixel[0] - target[0]) <= tol and abs(pixel[1] - target[1]) <= tol and abs(pixel[2] - target[2]) <= tol
 
 
-def _segments(image: Image.Image, target: tuple[int, int, int], tol: int, min_w: int, min_h: int) -> list[tuple[Box, float]]:
-    rgb = image.convert("RGB")
-    w, h = rgb.size
-    px = rgb.load()
-    # Keep disconnected same-color pixels (e.g. avatar highlights) separate from
-    # a short bubble. Row extrema used to stretch a 48px bubble across an avatar
-    # and fail the fill test even though the message was plainly visible.
-    matching: set[tuple[int, int]] = set()
-    for y in range(h):
-        matching.update((x, y) for x in range(w) if _matches(px[x, y], target, tol))
-    boxes: list[tuple[Box, float]] = []
-    while matching:
-        seed = matching.pop()
+def _cv():
+    """OpenCV/numpy when installed (always on the worker); ``None`` selects the pure-Python
+    reference implementation, which returns identical components."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:  # pragma: no cover - minimal web-only installs
+        return None
+    return cv2, np
+
+
+def _components_cv(mask) -> list[tuple[int, int, int, int, int]]:
+    """4-connected components of a boolean mask as (left, top, width, height, pixel_count)."""
+    cv2, np = _CV
+    if mask.size == 0:
+        return []
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=4)
+    return [(int(x), int(y), int(w), int(h), int(a)) for x, y, w, h, a in stats[1:count]]
+
+
+def _components_py(points: set[tuple[int, int]]) -> list[tuple[int, int, int, int, int]]:
+    out = []
+    while points:
+        seed = points.pop()
         pending = [seed]
         left = right = seed[0]
         top = bottom = seed[1]
@@ -54,15 +65,51 @@ def _segments(image: Image.Image, target: tuple[int, int, int], tol: int, min_w:
             top, bottom = min(top, y), max(bottom, y)
             hits += 1
             for neighbor in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-                if neighbor in matching:
-                    matching.remove(neighbor)
+                if neighbor in points:
+                    points.remove(neighbor)
                     pending.append(neighbor)
-        height = bottom - top + 1
-        width = right - left + 1
+        out.append((left, top, right - left + 1, bottom - top + 1, hits))
+    return out
+
+
+def _color_components(image: Image.Image, target: tuple[int, int, int], tol: int) -> list[tuple[int, int, int, int, int]]:
+    rgb = image.convert("RGB")
+    if _CV is not None:
+        np = _CV[1]
+        arr = np.asarray(rgb).astype(np.int16)
+        mask = (np.abs(arr - np.array(target, dtype=np.int16)) <= tol).all(axis=2)
+        return _components_cv(mask)
+    w, h = rgb.size
+    px = rgb.load()
+    return _components_py({(x, y) for y in range(h) for x in range(w) if _matches(px[x, y], target, tol)})
+
+
+def _red_components(image: Image.Image, colors: Colors) -> list[tuple[int, int, int, int, int]]:
+    rgb = image.convert("RGB")
+    if _CV is not None:
+        np = _CV[1]
+        arr = np.asarray(rgb)
+        mask = ((arr[:, :, 0] >= colors.badge_red_min) & (arr[:, :, 1] <= colors.badge_green_max)
+                & (arr[:, :, 2] <= colors.badge_blue_max))
+        return _components_cv(mask)
+    return _components_py({(x, y) for y in range(rgb.height) for x in range(rgb.width)
+                           if (p := rgb.getpixel((x, y)))[0] >= colors.badge_red_min
+                           and p[1] <= colors.badge_green_max and p[2] <= colors.badge_blue_max})
+
+
+_CV = _cv()
+
+
+def _segments(image: Image.Image, target: tuple[int, int, int], tol: int, min_w: int, min_h: int) -> list[tuple[Box, float]]:
+    # Keep disconnected same-color pixels (e.g. avatar highlights) separate from
+    # a short bubble. Row extrema used to stretch a 48px bubble across an avatar
+    # and fail the fill test even though the message was plainly visible.
+    boxes: list[tuple[Box, float]] = []
+    for left, top, width, height, hits in _color_components(image, target, tol):
         if height >= min_h and width >= min_w:
             fill = hits / float(width * height)
             if fill >= 0.45:
-                boxes.append(((left, top, right + 1, bottom + 1), fill))
+                boxes.append(((left, top, left + width, top + height), fill))
     return boxes
 
 
@@ -83,7 +130,7 @@ def find_bubbles(frame: Image.Image, pane: Box, colors: Colors, min_w: int = 24,
                 box=(left + bl, top + bt, left + br, top + bb),
                 fill_ratio=fill,
             ))
-    bubbles.sort(key=lambda b: (b.box[3], b.box[0]))
+    bubbles.sort(key=lambda b: (b.box[3], b.box[0], b.box[1], b.box[2]))
     return bubbles
 
 
@@ -94,22 +141,6 @@ def has_send_failure(frame: Image.Image, bubble: Box, pane: Box, colors: Colors)
     sufficient to withhold success; real-page calibration is still required.
     """
     left, top, _, bottom = bubble
-    region = frame.convert("RGB").crop((max(pane[0], left - 40), top, left, bottom))
-    red = {(x, y) for y in range(region.height) for x in range(region.width)
-           if (p := region.getpixel((x, y)))[0] >= colors.badge_red_min
-           and p[1] <= colors.badge_green_max and p[2] <= colors.badge_blue_max}
-    while red:
-        pending = [red.pop()]
-        component = []
-        while pending:
-            x, y = pending.pop()
-            component.append((x, y))
-            for point in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-                if point in red:
-                    red.remove(point)
-                    pending.append(point)
-        width = max(x for x, _ in component) - min(x for x, _ in component) + 1
-        height = max(y for _, y in component) - min(y for _, y in component) + 1
-        if len(component) >= 8 and 2 <= width <= 32 and 6 <= height <= 32:
-            return True
-    return False
+    region = frame.crop((max(pane[0], left - 40), top, left, bottom))
+    return any(hits >= 8 and 2 <= width <= 32 and 6 <= height <= 32
+               for _, _, width, height, hits in _red_components(region, colors))

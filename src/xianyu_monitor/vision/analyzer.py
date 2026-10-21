@@ -12,7 +12,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from xianyu_monitor.detection.textnorm import normalize, parse_badge
 from xianyu_monitor.ocr.base import EMPTY, OcrResult
@@ -91,8 +91,27 @@ class PaneObservation:
         return self.bubbles[-1] if self.bubbles else None
 
 
+@dataclass
+class _ProbeState:
+    keywords: tuple[str, ...]
+    digest: str
+    image: Image.Image  # the last probe region whose every text line has been read
+    hits: tuple[str, ...]
+    incremental_reads: int = 0
+
+
+def _rgb(image: Image.Image) -> Image.Image:
+    return image if image.mode == "RGB" else image.convert("RGB")
+
+
 class FrameAnalyzer:
     ROW_CACHE_SIZE = 512
+    # Incremental safety OCR: changed rows are widened by this margin so that any text line
+    # touching a changed pixel is read whole (dialog headings are well below 2x this).
+    PROBE_BAND_MARGIN = 40
+    PROBE_BAND_STRIP = 4
+    PROBE_MAX_BAND_FRACTION = 0.6
+    PROBE_FULL_EVERY_N_READS = 20
 
     def __init__(self, profile: Profile, ocr: OcrPool):
         self.profile = profile
@@ -101,7 +120,8 @@ class FrameAnalyzer:
         self._row_cache: OrderedDict[str, RowObservation] = OrderedDict()
         self._last: FrameObservation | None = None
         self.frame_counter = 0
-        self._challenge_cache = None
+        self._challenge_cache: _ProbeState | None = None
+        self.probe_stats = {"full": 0, "incremental": 0, "reused": 0}
 
     def reset(self, profile: Profile | None = None) -> None:
         if profile is not None:
@@ -173,7 +193,7 @@ class FrameAnalyzer:
                       force_full: bool = False) -> FrameObservation:
         started = time.perf_counter()
         self.frame_counter += 1
-        frame = frame.convert("RGB")
+        frame = _rgb(frame)
         status, issues = self.check_layout(frame)
         probe_due = self.frame_counter % max(1, int(rt.challenge_probe_every_n_frames)) == 0
         challenge_hits: list[str] = []
@@ -278,20 +298,68 @@ class FrameAnalyzer:
         self._last = obs
         return obs
 
-    async def _probe_challenge(self, frame: Image.Image, rt: RuntimeSettings) -> list[str]:
-        assert self.profile.challenge_probe is not None
-        region = imageops.crop(frame, self.profile.challenge_probe).convert("RGB")
-        key = (imageops.digest(region), tuple(rt.challenge_keywords))
-        if self._challenge_cache is not None and self._challenge_cache[0] == key:
-            return list(self._challenge_cache[1])
-        result = (await self.ocr.recognize([(BLOCK_PREFIX + "probe", region)])).get(BLOCK_PREFIX + "probe", EMPTY)
-        text = normalize(result.text).replace(" ", "")
+    @staticmethod
+    def _keyword_hits(text: str, keywords: list[str]) -> list[str]:
+        text = normalize(text).replace(" ", "")
         hits = []
-        for keyword in rt.challenge_keywords:
+        for keyword in keywords:
             needle = normalize(keyword).replace(" ", "")
             if needle and needle in text:
                 hits.append(keyword)
-        self._challenge_cache = (key, tuple(hits))
+        return hits
+
+    def _changed_bands(self, before: Image.Image, after: Image.Image) -> list[tuple[int, int]]:
+        """Full-width horizontal bands covering every changed pixel plus a margin."""
+        diff = ImageChops.difference(before, after)
+        height, step, margin = after.height, self.PROBE_BAND_STRIP, self.PROBE_BAND_MARGIN
+        bands: list[list[int]] = []
+        for y in range(0, height, step):
+            if diff.crop((0, y, after.width, min(height, y + step))).getbbox() is None:
+                continue
+            top, bottom = max(0, y - margin), min(height, y + step + margin)
+            if bands and top <= bands[-1][1]:
+                bands[-1][1] = max(bands[-1][1], bottom)
+            else:
+                bands.append([top, bottom])
+        return [(top, bottom) for top, bottom in bands]
+
+    async def _probe_challenge(self, frame: Image.Image, rt: RuntimeSettings) -> list[str]:
+        """Safety OCR of the challenge probe region.
+
+        Identical pixels and keywords reuse the previous answer. After a *negative* full read,
+        later frames read only the bands that changed: every text line is then either
+        unchanged since a read without hits or fully inside a band that is read now, so the
+        answer equals a fresh full read without re-reading the whole (large) region. Positive
+        states, keyword/size changes and every ``PROBE_FULL_EVERY_N_READS`` reads do a full read.
+        """
+        assert self.profile.challenge_probe is not None
+        region = _rgb(imageops.crop(frame, self.profile.challenge_probe))
+        keywords = tuple(rt.challenge_keywords)
+        digest = imageops.digest(region)
+        state = self._challenge_cache
+        if state is not None and state.keywords == keywords and state.digest == digest:
+            self.probe_stats["reused"] += 1
+            return list(state.hits)
+        if (state is not None and state.keywords == keywords and not state.hits
+                and state.image.size == region.size and state.incremental_reads < self.PROBE_FULL_EVERY_N_READS):
+            bands = self._changed_bands(state.image, region)
+            if bands and sum(b - t for t, b in bands) <= self.PROBE_MAX_BAND_FRACTION * region.height:
+                requests = [(BLOCK_PREFIX + f"probe_band{i}", region.crop((0, top, region.width, bottom)))
+                            for i, (top, bottom) in enumerate(bands)]
+                results = await self.ocr.recognize(requests)
+                hits = []
+                for key, _ in requests:
+                    for hit in self._keyword_hits(results.get(key, EMPTY).text, list(keywords)):
+                        if hit not in hits:
+                            hits.append(hit)
+                self.probe_stats["incremental"] += 1
+                self._challenge_cache = _ProbeState(keywords, digest, region, tuple(hits),
+                                                    state.incremental_reads + 1)
+                return hits
+        result = (await self.ocr.recognize([(BLOCK_PREFIX + "probe", region)])).get(BLOCK_PREFIX + "probe", EMPTY)
+        hits = self._keyword_hits(result.text, list(keywords))
+        self.probe_stats["full"] += 1
+        self._challenge_cache = _ProbeState(keywords, digest, region, tuple(hits))
         return hits
 
     async def check_screen(self, frame: Image.Image, rt: RuntimeSettings) -> str:
@@ -304,27 +372,27 @@ class FrameAnalyzer:
     def probe_crop(self, frame: Image.Image) -> Image.Image | None:
         if self.profile.challenge_probe is None:
             return None
-        return imageops.crop(frame.convert("RGB"), self.profile.challenge_probe).convert("RGB")
+        return _rgb(imageops.crop(frame, self.profile.challenge_probe))
 
     # ----- conversation pane (reply targeting / verification) -----
     def bubble_text_crop(self, frame: Image.Image, box: tuple[int, int, int, int]) -> Image.Image:
         left, top, right, bottom = box
         inset = (left + 2, top + 2, max(left + 3, right - 2), max(top + 3, bottom - 2))
-        return imageops.crop(frame.convert("RGB"), inset).convert("RGB")
+        return _rgb(imageops.crop(frame, inset))
 
     def title_crop(self, frame: Image.Image) -> Image.Image | None:
         if self.profile.conversation_title is None:
             return None
-        return imageops.crop(frame.convert("RGB"), self.profile.conversation_title).convert("RGB")
+        return _rgb(imageops.crop(frame, self.profile.conversation_title))
 
     def composer_crop(self, frame: Image.Image) -> Image.Image | None:
         if self.profile.composer is None:
             return None
-        return imageops.crop(frame.convert("RGB"), self.profile.composer).convert("RGB")
+        return _rgb(imageops.crop(frame, self.profile.composer))
 
     async def analyze_pane(self, frame: Image.Image) -> PaneObservation:
         p = self.profile
-        frame = frame.convert("RGB")
+        frame = _rgb(frame)
         requests: list[tuple[str, Image.Image]] = []
         title_crop = self.title_crop(frame)
         if title_crop is not None:

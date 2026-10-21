@@ -87,6 +87,7 @@ messages are involved. See [docs/TESTING.md](docs/TESTING.md).
 - [Limitations and blind spots](docs/LIMITATIONS.md)
 - [Compatibility (ARM64 / Ubuntu 20.04)](docs/COMPATIBILITY.md)
 - [Testing](docs/TESTING.md)
+- [Performance on the RK3588](docs/PERFORMANCE.md)
 - [Security](SECURITY.md)
 
 ## License

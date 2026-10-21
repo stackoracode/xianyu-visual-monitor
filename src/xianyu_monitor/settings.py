@@ -51,6 +51,11 @@ class Settings(BaseModel):
     ocr_workers: int = 1
     ocr_use_processes: bool = True
     tesseract_lang: str = "chi_sim+eng"
+    # "auto" pins OCR processes to the fastest CPU cluster (the A76 cores on RK3588) when the
+    # CPUs differ; "none" disables pinning; or an explicit list such as "4-7".
+    ocr_cpu_affinity: str = "auto"
+    ocr_threads: int = 0  # ONNX Runtime intra-op threads; 0 = one per pinned CPU, else ORT default
+    ocr_cache_size: int = 4096  # exact-pixel OCR result cache entries; 0 disables
 
     input_backend: Literal["xdotool", "fake"] = "xdotool"
     input_text_method: Literal["clipboard", "xdotool_type"] = "clipboard"

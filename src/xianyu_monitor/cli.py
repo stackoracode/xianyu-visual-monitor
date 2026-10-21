@@ -36,17 +36,27 @@ def cmd_web(args: argparse.Namespace) -> int:
     return 0
 
 
+def ocr_pool_from_settings(settings: Settings, use_processes: bool | None = None):
+    from xianyu_monitor.cpu import resolve_affinity
+    from xianyu_monitor.ocr.pool import OcrPool
+
+    processes = settings.ocr_use_processes if use_processes is None else use_processes
+    # Affinity is applied inside OCR child processes only, never to the worker's event loop.
+    cpus = resolve_affinity(settings.ocr_cpu_affinity) if processes else []
+    return OcrPool(settings.ocr_backend, settings.ocr_workers, processes, settings.tesseract_lang,
+                   cache_size=settings.ocr_cache_size, cpus=cpus, threads=settings.ocr_threads)
+
+
 def build_worker(settings: Settings):
     from xianyu_monitor.capture.backends import create_capture
     from xianyu_monitor.capture.x11 import discover, x_env
     from xianyu_monitor.db import Database
-    from xianyu_monitor.ocr.pool import OcrPool
     from xianyu_monitor.replies.input import RecordingInput, XdotoolInput
     from xianyu_monitor.worker.service import MonitorService
 
     db = Database(settings.database_url)
     capture = create_capture(settings)
-    ocr = OcrPool(settings.ocr_backend, settings.ocr_workers, settings.ocr_use_processes, settings.tesseract_lang)
+    ocr = ocr_pool_from_settings(settings)
 
     def input_factory():
         if settings.input_backend == "fake":
@@ -240,6 +250,128 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_benchmark(args: argparse.Namespace) -> int:
+    """Time analysis stages on private screenshots and check that the optimizations agree
+    with fresh/exhaustive results. Prints timings and booleans only, never text or pixels."""
+    import time
+
+    from PIL import Image
+
+    from xianyu_monitor.cpu import resolve_affinity
+    from xianyu_monitor.ocr.pool import OcrPool
+    from xianyu_monitor.runtime_settings import RuntimeSettings
+    from xianyu_monitor.timeutil import utcnow
+    from xianyu_monitor.vision.analyzer import FrameAnalyzer
+    from xianyu_monitor.vision.profile import load_profile
+
+    settings = _settings()
+    profile = load_profile(Path(args.profile))
+    rt = RuntimeSettings()
+    affinity = args.cpus if args.cpus is not None else settings.ocr_cpu_affinity
+    cpus = resolve_affinity(affinity) if args.processes else []
+    threads = args.threads if args.threads is not None else settings.ocr_threads
+
+    def pool(cache: int) -> OcrPool:
+        return OcrPool(args.ocr, 1, use_processes=args.processes, lang=settings.tesseract_lang,
+                       cache_size=cache, cpus=cpus, threads=threads)
+
+    def ms(started: float) -> float:
+        return round((time.perf_counter() - started) * 1000.0, 1)
+
+    def texts(obs, pane) -> list:
+        rows = [(r.index, r.name, r.preview, r.time_text, r.badge_count) for r in obs.rows]
+        return [rows, obs.challenge_hits, pane and (pane.title, pane.composer_text,
+                                                    [(b.direction, b.text) for b in pane.bubbles])]
+
+    frames = []
+    for path in args.image:
+        with Image.open(path) as image:
+            frames.append(image.convert("RGB"))
+
+    async def main() -> dict:
+        plain, cached = pool(0), pool(max(1, settings.ocr_cache_size))
+        report: dict = {"ocr": args.ocr, "processes": args.processes, "cpus": cpus, "threads": threads,
+                        "frames": []}
+        try:
+            warm = FrameAnalyzer(profile, plain)
+            await warm.analyze(frames[0], utcnow(), rt, force_full=True)  # load models once
+            previous = None
+            for frame in frames:
+                entry: dict = {}
+                fresh = []
+                for _ in range(max(1, args.repeat)):
+                    analyzer = FrameAnalyzer(profile, plain)
+                    started = time.perf_counter()
+                    obs = await analyzer.analyze(frame, utcnow(), rt, force_full=True)
+                    entry.setdefault("analyze_uncached_ms", []).append(ms(started))
+                    pane = None
+                    if profile.message_pane is not None:
+                        started = time.perf_counter()
+                        pane = await analyzer.analyze_pane(frame)
+                        entry.setdefault("pane_uncached_ms", []).append(ms(started))
+                    fresh.append(texts(obs, pane))
+                # The exact-pixel cache is only valid if re-reading identical pixels is stable.
+                entry["fresh_reads_identical"] = all(item == fresh[0] for item in fresh)
+                analyzer = FrameAnalyzer(profile, cached)
+                await analyzer.analyze(frame, utcnow(), rt, force_full=True)
+                started = time.perf_counter()
+                obs = await analyzer.analyze(frame, utcnow(), rt, force_full=True)
+                entry["analyze_cached_ms"] = ms(started)
+                pane = None
+                if profile.message_pane is not None:
+                    await analyzer.analyze_pane(frame)
+                    started = time.perf_counter()
+                    pane = await analyzer.analyze_pane(frame)
+                    entry["pane_cached_ms"] = ms(started)
+                entry["cached_matches_fresh"] = texts(obs, pane) == fresh[0]
+                if profile.challenge_probe is not None:
+                    full = FrameAnalyzer(profile, plain)
+                    started = time.perf_counter()
+                    full_hits = await full._probe_challenge(frame, rt)
+                    entry["probe_full_ms"] = ms(started)
+                    if previous is not None:
+                        incremental = FrameAnalyzer(profile, plain)
+                        await incremental._probe_challenge(previous, rt)
+                        started = time.perf_counter()
+                        hits = await incremental._probe_challenge(frame, rt)
+                        entry["probe_incremental_ms"] = ms(started)
+                        entry["probe_incremental_mode"] = ("incremental" if incremental.probe_stats["incremental"]
+                                                           else "full")
+                        entry["probe_incremental_matches_full"] = sorted(hits) == sorted(full_hits)
+                if args.reference and profile.message_pane is not None:
+                    from xianyu_monitor.vision.reply_image import (
+                        find_outgoing_image,
+                        find_outgoing_image_exhaustive,
+                        load_asset,
+                    )
+
+                    reference = load_asset(str(Path(args.reference).resolve())).image
+                    started = time.perf_counter()
+                    slow = find_outgoing_image_exhaustive(frame, reference, profile.message_pane,
+                                                          profile.image_match_threshold)
+                    entry["image_match_exhaustive_ms"] = ms(started)
+                    started = time.perf_counter()
+                    fast = find_outgoing_image(frame, reference, profile.message_pane, profile.image_match_threshold)
+                    entry["image_match_fast_cold_ms"] = ms(started)
+                    started = time.perf_counter()
+                    find_outgoing_image(frame, reference, profile.message_pane, profile.image_match_threshold)
+                    entry["image_match_fast_warm_ms"] = ms(started)
+                    entry["image_match_found"] = slow is not None
+                    entry["image_match_identical"] = (slow is None and fast is None) or (
+                        slow is not None and fast is not None and slow.box == fast.box
+                        and abs(slow.score - fast.score) < 1e-6)
+                report["frames"].append(entry)
+                previous = frame
+            report["ocr_cache"] = cached.stats()
+        finally:
+            plain.close()
+            cached.close()
+        return report
+
+    print(json.dumps(asyncio.run(main()), indent=2))
+    return 0
+
+
 def _run_db(coro_factory) -> object:
     from xianyu_monitor.db import Database
 
@@ -397,6 +529,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ocr", default="rapidocr", choices=["rapidocr", "tesseract"])
     p.add_argument("--pane", action="store_true", help="also analyze the conversation pane")
     p.set_defaults(func=cmd_analyze)
+
+    p = sub.add_parser("benchmark", help="time analysis on saved screenshots; prints timings and agreement only")
+    p.add_argument("image", nargs="+", help="one or more screenshots, e.g. before/after typing")
+    p.add_argument("--profile", required=True)
+    p.add_argument("--ocr", default="rapidocr", choices=["rapidocr", "tesseract"])
+    p.add_argument("--repeat", type=int, default=2)
+    p.add_argument("--processes", action="store_true", help="use an OCR process like the worker (enables pinning)")
+    p.add_argument("--cpus", default=None, help="OCR CPU affinity: auto, none or a list such as 4-7")
+    p.add_argument("--threads", type=int, default=None, help="ONNX Runtime intra-op threads (0 = auto)")
+    p.add_argument("--reference", help="reply image file to time the outgoing-image matcher")
+    p.set_defaults(func=cmd_benchmark)
 
     p = sub.add_parser("import-baseline", help="import historical customer names (one per line)")
     p.add_argument("file")
