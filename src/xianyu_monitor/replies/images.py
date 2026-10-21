@@ -87,6 +87,9 @@ class ImageReplyExecutor:
             await text.input.press("ctrl+l")
             await text.sleep(float(rt.reply_step_delay_seconds))
             await text.input.type_text(str(asset.path))
+            # GTK consumes Tab for filename completion; Ctrl+Tab moves focus away
+            # so its insertion caret cannot be OCR'd as part of the exact path.
+            await text.input.press("ctrl+Tab")
             await text.sleep(float(rt.reply_step_delay_seconds))
             frame = await text.capture()
             if not await self._dialog(frame, rt, asset.path):
