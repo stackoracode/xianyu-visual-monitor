@@ -242,7 +242,7 @@ class ReplyExecutor:
         """Leave a finished/cancelled action or an idle chat; preserve drafts and target changes."""
         frame = await self.capture()
         obs = await self.analyzer.analyze(frame, now(), rt)
-        if obs.status != "ok":
+        if obs.status not in {"ok", "unchanged"}:
             return {"returned": False, "reason": "screen_not_ready"}
         pane = await self.analyzer.analyze_pane(frame)
         if (not self._title_matches(pane, target, rt) or not self._composer_empty(pane)
