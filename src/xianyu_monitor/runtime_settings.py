@@ -70,6 +70,7 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("reply_min_confidence", "float", 0.90, "replies", 0.0, 1.0),
     SettingSpec("reply_debounce_seconds", "float", 3.0, "replies", 0.0, 30.0),
     SettingSpec("reply_verify_timeout_seconds", "float", 8.0, "replies", 1.0, 60.0),
+    SettingSpec("reply_refresh_timeout_seconds", "float", 20.0, "replies", 1.0, 60.0),
     SettingSpec("reply_step_delay_seconds", "float", 1.0, "replies", 0.1, 10.0),
     SettingSpec("reply_global_min_interval_seconds", "int", 30, "replies", 0, 86400),
     SettingSpec("reply_max_per_customer_per_day", "int", 3, "replies", 0, 1000),

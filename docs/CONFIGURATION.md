@@ -67,7 +67,7 @@ against your own frames.
 | `overall_unread_badge` | Informational only. |
 | `conversation_title`, `message_pane`, `composer`, `composer_click`, `composer_placeholder` | Required for replies and for direction checks on the open conversation. |
 | `challenge_probe` | Region OCR'd for login/verification keywords. |
-| `park_system_conversation` | Default `false`: enable only after verifying a system row stays in-page. Some versions open an external support tab. No fallback to another customer. |
+| `park_system_conversation` | Legacy ignored field. System rows are never clicked; submitted replies use F5 after verification. |
 | `anchors` | Regions that look the same in the normal layout (list header, site logo). Their `dhash` is captured from a known-good frame. |
 | `colors` | Measured from reference frames (16-bit color): badge red ≈ (248,76,72), selected row ≈ (232,236,232), incoming bubble ≈ (240,240,240), outgoing bubble ≈ (248,228,8), pane background ≈ (248,252,248). |
 
@@ -118,3 +118,7 @@ Use the rule tester on the Rules page before enabling anything.
 A newer observed incoming message supersedes safe, untyped jobs even if its text has
 no matching rule. Only the latest observed preview is evaluated; intermediate hidden
 messages cannot be reconstructed. See [burst handling](OPERATIONS.md#bursts-and-the-selected-conversation).
+
+`reply_refresh_timeout_seconds` (1–60, default 20) bounds recovery after F5.
+Send evidence is saved before reload; page-return failures do not change delivery status.
+Full wrapped bubble text is read using multi-line OCR with scaled input.

@@ -279,7 +279,8 @@ async def test_new_input_during_targeting_replans_then_parks_and_never_sends_old
     desk.click = incoming_on_first_open
     await drain_jobs(service, "reply")
     assert not any(a[0] == "type" for a in desk.actions)
-    assert desk.selected == 1
+    assert ("press", "F5") not in desk.actions
+    assert desk.selected == 0
     async with db.session() as s:
         intents = (await s.execute(select(ReplyIntent).order_by(ReplyIntent.id))).scalars().all()
         assert [(i.trigger_text, i.status) for i in intents] == [("还在吗", "superseded"), ("多久发货", "queued")]
@@ -288,12 +289,12 @@ async def test_new_input_during_targeting_replans_then_parks_and_never_sends_old
     await drain_jobs(service, "reply")
     assert ("type", "在的") not in desk.actions
     assert desk.actions.count(("type", "发货需卖家确认")) == 1
-    assert desk.selected == 1
+    assert desk.selected is None
     async with db.session() as s:
         statuses = list((await s.execute(select(ReplyIntent.status).order_by(ReplyIntent.id))).scalars())
         assert statuses == ["superseded", "sent_verified"]
         parked = (await s.execute(select(ReplyIntent).where(ReplyIntent.status == "sent_verified"))).scalar_one()
-        assert parked.verification["parking"]["parked"]
+        assert parked.verification["return_to_list"]["returned"]
     await service.release_lease()
 
 async def test_arrival_after_paste_preserves_draft_and_requires_review_without_enter(db, settings):
@@ -322,6 +323,7 @@ async def test_arrival_after_paste_preserves_draft_and_requires_review_without_e
     await drain_jobs(service, "reply")
     assert ("press", "Return") not in desk.actions
     assert desk.composer == "在的" and desk.selected == 0
+    assert ("press", "F5") not in desk.actions
     async with db.session() as s:
         intents = (await s.execute(select(ReplyIntent).order_by(ReplyIntent.id))).scalars().all()
         assert [i.status for i in intents] == ["draft_review", "review"]

@@ -353,6 +353,7 @@
  "setting.reply_max_per_customer_per_day": "Max replies per customer per day",
  "setting.reply_min_confidence": "Minimum detection confidence for replies",
  "setting.reply_mode": "Reply mode",
+ "setting.reply_refresh_timeout_seconds": "Page reload timeout after submission (seconds)",
  "setting.reply_send_enabled": "Reply sending enabled",
  "setting.reply_step_delay_seconds": "Delay between input steps (seconds)",
  "setting.reply_text_match_similarity": "Bubble text match threshold",

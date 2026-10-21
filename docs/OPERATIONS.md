@@ -44,14 +44,18 @@ replies pause for owner inspection. These drafts have no automatic resend action
 After inspecting/clearing the draft on the seller desktop, review the latest intent
 and resume replies explicitly; do not re-submit an uncertain send without checking delivery.
 
-After a reply attempt that opened a customer, the worker samples that conversation
-before leaving. With `park_system_conversation` enabled in the calibration profile
-(off by default), it selects only a uniquely identified, visible excluded system conversation,
-then verifies its title. It never uses another customer as a parking target. An owner
-draft or unavailable system row prevents parking. Pixel changes before the parking
-click cancel that click. Enable this only after controlled verification that the system
-row stays in-page: on the tested board, the support row opened a separate support tab,
-so parking stays disabled and the selected-pane detector handles badge-free arrivals.
+After pressing Enter, the worker checks the full outgoing bubble (including wrapped
+lines) and failure indicators before recording the send outcome. It samples any newer
+incoming message, then presses F5 to return to the conversation list. It waits for healthy
+anchors and an empty, unselected conversation pane; loading frames never count as return
+success. The return result is recorded separately from the send result, so a page reload
+cannot erase verified send evidence or turn an uncertain send into success.
+
+System conversation names only exclude those rows from monitoring and replies. They
+are never clicked. The legacy `park_system_conversation` profile field is ignored.
+An owner draft or changed target prevents F5; no submitted Enter means no refresh.
+A failed return pauses replies and never re-presses Enter. `reply_refresh_timeout_seconds`
+(default 20) bounds the wait for the conversation list to recover.
 
 The selected conversation is monitored even without a red badge: its title must match
 the identified customer, its latest bubble must have a confident incoming direction,

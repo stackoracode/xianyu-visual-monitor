@@ -332,13 +332,13 @@ class FrameAnalyzer:
         if p.message_pane is not None:
             boxes = find_bubbles(frame, p.message_pane, p.colors, p.min_bubble_width, p.min_bubble_height)
             for i, bubble in enumerate(boxes):
-                requests.append((f"b{i}", self.bubble_text_crop(frame, bubble.box)))
+                requests.append((BLOCK_PREFIX + f"b{i}", self.bubble_text_crop(frame, bubble.box)))
         results = await self.ocr.recognize(requests)
         title = results.get("title", EMPTY)
         composer = results.get(BLOCK_PREFIX + "composer", EMPTY)
         bubbles = []
         for i, bubble in enumerate(boxes):
-            res = results.get(f"b{i}", EMPTY)
+            res = results.get(BLOCK_PREFIX + f"b{i}", EMPTY)
             bubbles.append(Bubble(bubble.direction, res.text.strip(), res.confidence, bubble.box))
         failed = any(b.direction == "outgoing" and has_send_failure(frame, b.box, p.message_pane, p.colors)
                      for b in boxes) if p.message_pane is not None else False
