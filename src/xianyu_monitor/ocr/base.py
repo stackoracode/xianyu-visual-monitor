@@ -49,12 +49,13 @@ class RapidOcrEngine:
 
     name = "rapidocr"
 
-    def __init__(self, scale: int = 2):
+    def __init__(self, scale: int = 2, threads: int = 0):
         try:
             from rapidocr_onnxruntime import RapidOCR  # type: ignore[import-not-found]
         except Exception as exc:  # pragma: no cover - depends on optional install
             raise OcrUnavailable("rapidocr_onnxruntime is not installed (pip install -r requirements/ocr.txt)") from exc
-        self._engine = RapidOCR()
+        # Thread count only changes scheduling; RapidOCR ignores values outside 1..cpu_count.
+        self._engine = RapidOCR(intra_op_num_threads=threads) if threads > 0 else RapidOCR()
         self._scale = scale
 
     def recognize_line(self, image: Image.Image) -> OcrResult:  # pragma: no cover - real OCR
@@ -172,10 +173,32 @@ class FakeOcrEngine:
 
     def __init__(self) -> None:
         self._table: dict[str, OcrResult] = {}
+        self._regions: list[tuple[int, bytes, list[tuple[int, int, str]], float]] = []
         self.calls = 0
 
     def register(self, image: Image.Image, text: str, confidence: float = 0.99) -> None:
         self._table[imageops.digest(image.convert("RGB"))] = OcrResult(text, confidence)
+
+    def register_lines(self, image: Image.Image, lines: list[tuple[int, int, str]], confidence: float = 0.9) -> None:
+        """Let full-width horizontal bands of ``image`` read the text lines they fully contain."""
+        rgb = image.convert("RGB")
+        self._regions.append((rgb.width, rgb.tobytes(), lines, confidence))
+
+    def _band(self, image: Image.Image) -> OcrResult | None:
+        rgb = image.convert("RGB")
+        data, stride = rgb.tobytes(), rgb.width * 3
+        for width, source, lines, confidence in reversed(self._regions):
+            if width != rgb.width or not data:
+                continue
+            offset = source.find(data)
+            while offset >= 0 and offset % stride:
+                offset = source.find(data, offset + 1)
+            if offset < 0:
+                continue
+            top = offset // stride
+            inside = [text for y0, y1, text in lines if y0 >= top and y1 <= top + rgb.height]
+            return OcrResult("\n".join(inside), confidence if inside else 1.0)
+        return None
 
     def recognize_line(self, image: Image.Image) -> OcrResult:
         self.calls += 1
@@ -184,12 +207,15 @@ class FakeOcrEngine:
     def recognize_block(self, image: Image.Image) -> OcrResult:
         # Unregistered block regions contain no text (confidence 1.0 means "confidently empty").
         self.calls += 1
-        return self._table.get(imageops.digest(image.convert("RGB")), OcrResult("", 1.0))
+        found = self._table.get(imageops.digest(image.convert("RGB")))
+        if found is None and self._regions:
+            found = self._band(image)
+        return found if found is not None else OcrResult("", 1.0)
 
 
-def create_engine(backend: str, tesseract_lang: str = "chi_sim+eng") -> OcrEngine:
+def create_engine(backend: str, tesseract_lang: str = "chi_sim+eng", threads: int = 0) -> OcrEngine:
     if backend == "rapidocr":
-        return RapidOcrEngine()
+        return RapidOcrEngine(threads=threads)
     if backend == "tesseract":
         return TesseractEngine(lang=tesseract_lang)
     if backend == "fake":

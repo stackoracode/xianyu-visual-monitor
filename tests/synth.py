@@ -188,6 +188,9 @@ def register(scene: Scene, frame: Image.Image, analyzer: FrameAnalyzer, fake: Fa
         probe = analyzer.probe_crop(frame)
         if probe is not None:
             fake.register(probe, scene.challenge, 0.9)
+            # Incremental safety OCR reads changed bands; the prompt line is drawn at y=300.
+            line_top = 300 - profile.challenge_probe[1]
+            fake.register_lines(probe, [(line_top - 2, line_top + 14, scene.challenge)])
 
 
 class Harness:

@@ -25,6 +25,24 @@ def digest(image: Image.Image) -> str:
     return h.hexdigest()
 
 
+def _ink_extents(gray: Image.Image, threshold: int) -> list[tuple[int, int] | None]:
+    """Per scanline, the (min_x, max_x) of pixels darker than ``threshold``, else None."""
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover - minimal web-only installs
+        px = gray.load()
+        out: list[tuple[int, int] | None] = []
+        for y in range(gray.height):
+            xs = [x for x in range(gray.width) if px[x, y] < threshold]
+            out.append((xs[0], xs[-1]) if xs else None)
+        return out
+    ink = np.asarray(gray) < threshold
+    present = ink.any(axis=1)
+    first = ink.argmax(axis=1)
+    last = gray.width - 1 - ink[:, ::-1].argmax(axis=1)
+    return [(int(first[y]), int(last[y])) if present[y] else None for y in range(gray.height)]
+
+
 def bubble_text_lines(image: Image.Image) -> list[Image.Image]:
     """Locate dark text rows on a light bubble; return no crops when ambiguous."""
     gray = image.convert("L")
@@ -32,8 +50,8 @@ def bubble_text_lines(image: Image.Image) -> list[Image.Image]:
     background = max(range(256), key=histogram.__getitem__)
     if background < 170:
         return []
-    px = gray.load()
-    rows = [y for y in range(gray.height) if any(px[x, y] < background - 40 for x in range(gray.width))]
+    extents = _ink_extents(gray, background - 40)
+    rows = [y for y, extent in enumerate(extents) if extent is not None]
     groups: list[list[int]] = []
     for y in rows:
         if not groups or y - groups[-1][-1] > 3:
@@ -43,9 +61,11 @@ def bubble_text_lines(image: Image.Image) -> list[Image.Image]:
         return []  # punctuation-only/fragmented rows need ordinary block OCR
     out = []
     for group in groups:
-        xs = [x for y in group for x in range(gray.width) if px[x, y] < background - 40]
-        out.append(image.crop((max(0, min(xs) - 3), max(0, group[0] - 3),
-                               min(gray.width, max(xs) + 4), min(gray.height, group[-1] + 4))))
+        spans = [extents[y] for y in group]
+        min_x = min(span[0] for span in spans if span is not None)
+        max_x = max(span[1] for span in spans if span is not None)
+        out.append(image.crop((max(0, min_x - 3), max(0, group[0] - 3),
+                               min(gray.width, max_x + 4), min(gray.height, group[-1] + 4))))
     return out
 
 

@@ -322,3 +322,12 @@ async def test_f5_preserves_composer_when_ocr_is_unreadable():
     result = await executor.return_to_list(target, RT)
     assert result['reason'] == 'owner_changed_target_or_draft_present'
     assert desk.actions == before
+
+
+async def test_outcome_records_phase_timings_without_text():
+    desk, executor, target, set_phase, _ = setup()
+    outcome = await executor.execute(target, RT, set_phase)
+    timings = outcome.details["phase_seconds"]
+    assert list(timings)[:4] == ["precheck", "targeting", "verifying_target", "typing"]
+    assert all(isinstance(v, float) and v >= 0 for v in timings.values())
+    assert outcome.details["elapsed_seconds"] >= 0
