@@ -31,6 +31,8 @@ class Rule:
     allow_sensitive: bool = False
     requires_review: bool = False
     enabled: bool = True
+    trigger_type: str = "keyword"
+    send_image: bool = False
 
 
 @dataclass
@@ -53,7 +55,9 @@ class RuleError(ValueError):
 
 
 def validate_rule(rule: Rule) -> None:
-    if not rule.patterns:
+    if rule.trigger_type not in {"keyword", "first_contact"}:
+        raise RuleError("trigger_type must be keyword or first_contact")
+    if not rule.patterns and rule.trigger_type == "keyword":
         raise RuleError("at least one pattern is required")
     if rule.match_type not in {"contains", "exact", "regex"}:
         raise RuleError("match_type must be contains, exact or regex")
@@ -139,7 +143,7 @@ def render_template(template: str, customer_name: str) -> str:
 
 def evaluate(text: str, rules: list[Rule], *, customer_status: str, customer_name: str,
              sensitive_terms: list[str], attachment_markers: list[str], negations: list[str],
-             truncated: bool | None = None) -> Decision:
+             truncated: bool | None = None, first_contact: bool = False) -> Decision:
     raw = text or ""
     norm = normalize(raw)
     if not norm:
@@ -153,6 +157,11 @@ def evaluate(text: str, rules: list[Rule], *, customer_status: str, customer_nam
     negated_rules: list[Rule] = []
     for rule in rules:
         if not rule.enabled or rule.scope not in scope_ok or _excluded(rule, norm):
+            continue
+        if rule.trigger_type == "first_contact":
+            if not first_contact:
+                continue
+            matches.append(RuleMatch(rule, ["first_contact"]))
             continue
         hits = _matches(rule, norm)
         if not hits:
@@ -171,7 +180,7 @@ def evaluate(text: str, rules: list[Rule], *, customer_status: str, customer_nam
     top = matches[0]
     reasons: list[str] = []
     same_priority = [m for m in matches if m.rule.priority == top.rule.priority]
-    if len({m.rule.template for m in same_priority}) > 1:
+    if len({(m.rule.template, m.rule.send_image) for m in same_priority}) > 1:
         reasons.append("ambiguous_rules_same_priority")
     if negated_rules:
         reasons.append("another_rule_negated")

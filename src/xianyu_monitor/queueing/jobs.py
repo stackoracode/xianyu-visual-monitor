@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 TERMINAL = {"succeeded", "failed", "uncertain", "cancelled"}
 # Phases after which an interrupted attempt may already have had an external effect.
 IRREVERSIBLE_PHASES = {"submitting", "typing", "verifying_draft", "sending", "sent", "verifying_send"}
+IRREVERSIBLE_PHASES |= {"image_preparing", "image_dialog", "image_path", "image_submitting", "image_verifying"}
 
 
 @dataclass

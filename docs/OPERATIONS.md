@@ -96,3 +96,23 @@ a reply action are discarded as `superseded` rather than rolling back customer s
   not depend on any external reviewer, and no reviewer is scheduled automatically.
 * Saved diagnostic frames (`/var/lib/xianyu-monitor/frames`) are **private screenshots**. Keep
   the directory permissions as installed (root:xvm, 2770) and do not share it.
+
+## Text followed by an image
+
+Text is sent and durably verified first. Only then does the image part open the
+calibrated file chooser, verify the complete path, submit it, and wait for an outgoing
+thumbnail plus the conversation's image preview. A thumbnail must be new relative
+to the pre-upload frame, right-aligned, and match the private reference in structure
+and color; visible failure indicators prevent success. Stable evidence is observed
+for `reply_image_verify_seconds`, within `reply_image_timeout_seconds`.
+
+Text status and image status are separate on the Replies page. An image failure or
+uncertain upload never demotes verified text or automatically repeats it. A crash
+while selecting/uploading leaves the image uncertain and pauses replies; it does not
+requeue the text. Historical uncertain jobs require owner inspection. A generic
+retry does not replay an already verified text reply.
+
+The worker uses F5 after the image finishes or safely fails, provided the target is
+still verified and there is no draft. An unknown/blocked file dialog pauses instead
+of guessing keys in another window. Incoming context observed before selection can
+cancel a stale image; observable newer messages during verification are persisted.

@@ -312,3 +312,28 @@ async def test_debounce_and_safe_review_reapproval_create_a_fresh_job(db, rt):
         await enqueue_reply_job(s, intent)
         assert intent.job_id != previous_id and intent.status == "queued"
         assert (await s.get(Job, intent.job_id)).status == "pending"
+
+
+async def test_first_contact_image_is_coalesced_then_consumed_once(db, rt):
+    async with db.transaction() as s:
+        s.add(KeywordRule(name='welcome', enabled=True, priority=100, trigger_type='first_contact', send_image=True,
+                          match_type='contains', match_mode='any', patterns=[], exclude_patterns=[],
+                          template='您好，请提供需求', cooldown_seconds=0, scope='new',
+                          allow_sensitive=False, requires_review=False, created_at=utcnow(), updated_at=utcnow()))
+    h, proc = await seeded(db, rt)
+    auto = rt.with_overrides(reply_mode='auto', reply_send_enabled=True, reply_default_image_path='/private/default.png')
+    rows = [SRow('新买家', '咨询一下', '刚刚', badge=1, avatar=99)] + baseline_rows()
+    first = await run(h, proc, Scene(rows=rows), auto, 30)
+    rows[0].preview, rows[0].badge = '补充问题', 2
+    second = await run(h, proc, Scene(rows=rows), auto, 40)
+    async with db.transaction() as s:
+        old = await s.get(ReplyIntent, first.intents[0])
+        current = await s.get(ReplyIntent, second.intents[0])
+        assert old.status == 'superseded' and current.first_contact and current.send_image
+        assert current.image_status == 'pending' and current.image_path == '/private/default.png'
+        current.status, current.sent_at = 'sent_verified', utcnow()
+        current.image_status = 'failed'  # a failed image must not repeat the welcome text
+        (await s.get(Job, current.job_id)).status = 'failed'
+    rows[0].preview, rows[0].badge = '再次咨询', 3
+    third = await run(h, proc, Scene(rows=rows), auto, 50)
+    assert not third.intents

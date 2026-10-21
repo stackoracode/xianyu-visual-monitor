@@ -74,3 +74,14 @@ def test_template_cannot_inject_format_fields():
     with pytest.raises(RuleError):
         validate_rule(rule(match_type="regex", patterns=("([",)))
     validate_rule(rule())
+
+
+def test_first_contact_and_keyword_choose_one_rule():
+    welcome = rule(rid=10, priority=50, patterns=(), trigger_type='first_contact', send_image=True)
+    greeting = rule(rid=11, priority=100, patterns=('你好',), send_image=True)
+    validate_rule(welcome)
+    args = dict(customer_status='new', customer_name='买家A', sensitive_terms=[], attachment_markers=[], negations=[])
+    assert evaluate('你好', [welcome, greeting], first_contact=True, **args).rule.id == 11
+    assert evaluate('咨询一下', [welcome], first_contact=True, **args).rule.id == 10
+    assert evaluate('咨询一下', [welcome], first_contact=False, **args).action == 'none'
+    assert decide('你好', [greeting, rule(rid=12, patterns=('你好',), send_image=False)]).action == 'review'

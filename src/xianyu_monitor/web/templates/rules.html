@@ -6,8 +6,8 @@
 <table>
   <tr><th>{{ t('rules.priority') }}</th><th>{{ t('common.name') }}</th><th>{{ t('rules.enabled') }}</th><th>{{ t('rules.patterns') }}</th><th>{{ t('rules.template') }}</th><th>{{ t('rules.cooldown') }}</th><th>{{ t('rules.flags') }}</th><th></th></tr>
   {% for r in rules %}
-  <tr><td>{{ r.priority }}</td><td>{{ r.name }}</td><td>{{ '✓' if r.enabled else '' }}</td><td class="source">{{ r.match_type }}/{{ r.match_mode }}: {{ r.patterns|join(' | ') }}{% if r.exclude_patterns %}<br><span class="muted">− {{ r.exclude_patterns|join(' | ') }}</span>{% endif %}</td>
-    <td class="source">{{ r.template }}</td><td>{{ r.cooldown_seconds }}s</td>
+  <tr><td>{{ r.priority }}</td><td>{{ r.name }}</td><td>{{ '✓' if r.enabled else '' }}</td><td class="source">{{ t('rules.trigger.' ~ r.trigger_type) }} · {{ r.match_type }}/{{ r.match_mode }}: {{ r.patterns|join(' | ') }}{% if r.exclude_patterns %}<br><span class="muted">− {{ r.exclude_patterns|join(' | ') }}</span>{% endif %}</td>
+    <td class="source">{{ r.template }}{% if r.send_image %}<br><span class="pill">{{ t('rules.send_image') }}</span>{% endif %}</td><td>{{ r.cooldown_seconds }}s</td>
     <td>{{ t('rules.scope.' ~ r.scope) }}{% if r.allow_sensitive %} · {{ t('rules.allow_sensitive') }}{% endif %}{% if r.requires_review %} · {{ t('rules.requires_review') }}{% endif %}</td>
     <td><a href="/rules?edit={{ r.id }}">{{ t('common.edit') }}</a>
       <form method="post" action="/rules/{{ r.id }}/delete" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button class="link">{{ t('common.delete') }}</button></form></td></tr>
@@ -20,9 +20,12 @@
     <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="id" value="{{ e.id if e else '' }}">
     <label>{{ t('common.name') }} <input name="name" value="{{ e.name if e else '' }}" required></label>
     <label>{{ t('rules.priority') }} <input name="priority" type="number" value="{{ e.priority if e else 100 }}"></label>
+    <label>{{ t('rules.trigger_type') }} <select name="trigger_type">{% for v in ['keyword', 'first_contact'] %}<option value="{{ v }}" {% if e and e.trigger_type == v %}selected{% endif %}>{{ t('rules.trigger.' ~ v) }}</option>{% endfor %}</select></label>
+    <label class="check"><input type="checkbox" name="send_image" value="1" {% if e and e.send_image %}checked{% endif %}> {{ t('rules.send_image') }}</label>
+    <p class="hint">{{ t('rules.image_hint') }}</p>
     <label>{{ t('rules.match_type') }} <select name="match_type">{% for m in ['contains', 'exact', 'regex'] %}<option value="{{ m }}" {% if e and e.match_type == m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></label>
     <label>{{ t('rules.match_mode') }} <select name="match_mode">{% for m in ['any', 'all'] %}<option value="{{ m }}" {% if e and e.match_mode == m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></label>
-    <label>{{ t('rules.patterns') }} ({{ t('common.one_per_line') }}) <textarea name="patterns" rows="3" required>{{ (e.patterns if e else [])|join('\n') }}</textarea></label>
+    <label>{{ t('rules.patterns') }} ({{ t('common.one_per_line') }}) <textarea name="patterns" rows="3">{{ (e.patterns if e else [])|join('\n') }}</textarea></label>
     <label>{{ t('rules.exclude') }} ({{ t('common.one_per_line') }}) <textarea name="exclude_patterns" rows="2">{{ (e.exclude_patterns if e else [])|join('\n') }}</textarea></label>
     <label>{{ t('rules.template') }} <textarea name="template" rows="2" required>{{ e.template if e else '' }}</textarea></label>
     <p class="hint">{{ t('rules.template_hint') }}</p>
@@ -41,6 +44,7 @@
     <label>{{ t('rules.test_text') }} <input name="text" value="{{ test.text if test else '' }}" required></label>
     <label>{{ t('rules.customer_status') }} <select name="customer_status">{% for s in ['known', 'new', 'baseline'] %}<option value="{{ s }}" {% if test and test.status == s %}selected{% endif %}>{{ t('status.' ~ s) }}</option>{% endfor %}</select></label>
     <label class="check"><input type="checkbox" name="include_disabled" value="1"> {{ t('rules.include_disabled') }}</label>
+    <label class="check"><input type="checkbox" name="first_contact" value="1"> {{ t('rules.trigger.first_contact') }}</label>
     <button>{{ t('rules.run_test') }}</button>
   </form>
   {% if test %}

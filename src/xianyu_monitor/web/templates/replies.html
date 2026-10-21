@@ -15,7 +15,7 @@
         <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="approve">
         <textarea name="reply_text" rows="2">{{ i.reply_text }}</textarea><button>{{ t('replies.approve') }}</button></form>
       {% else %}<span class="source">{{ i.reply_text }}</span>{% endif %}</td>
-    <td>{% for r in i.reasons or [] %}<span class="pill">{{ t('reason.' ~ r) }}</span> {% endfor %}{% if i.verification %}<br><code>{{ i.verification }}</code>{% endif %}</td>
+    <td>{% if i.send_image %}<span class="pill">{{ t('rules.send_image') }}: {{ t('image.' ~ i.image_status) }}</span>{% endif %}{% for r in i.reasons or [] %}<span class="pill">{{ t('reason.' ~ r) }}</span> {% endfor %}{% if i.verification %}<br><code>{{ i.verification }}</code>{% endif %}</td>
     <td>{% if i.status in ['review', 'approved', 'planned', 'dry_run'] %}<form method="post" action="/replies/{{ i.id }}/action" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="action" value="reject"><button class="link">{{ t('replies.reject') }}</button></form>{% endif %}</td></tr>
   {% else %}<tr><td colspan="8">{{ t('common.none') }}</td></tr>{% endfor %}
 </table>
