@@ -36,6 +36,7 @@ class ImageDesktop(FakeDesktop):
         self.elapsed = 0.
         self.upload_delay = 0.
         self.upload_ready_at = None
+        self.path_caret = False
 
     async def sleep(self, seconds):
         self.elapsed += seconds
@@ -56,7 +57,7 @@ class ImageDesktop(FakeDesktop):
             if self.path:
                 draw.text((285, 70), self.path, fill='black')
                 self.h.fake.register(frame.crop(self.h.profile.image_dialog_path),
-                                     '/wrong/image.png' if self.bad_path else self.path, .99)
+                                     '/wrong/image.png' if self.bad_path else self.path + ('l' if self.path_caret else ''), .99)
             return frame
         frame = super().capture()
         if self.failure_icon and self.image_sent:
@@ -94,6 +95,8 @@ class ImageDesktop(FakeDesktop):
             self.actions.append(('dialog_key', key))
             if key == 'Escape':
                 self.dialog = False
+            elif key == 'ctrl+Tab':
+                self.path_caret = False
             elif key == 'Return':
                 # Real board reproducer: Return cancels, even with a valid path.
                 self.dialog = False
@@ -147,6 +150,20 @@ async def test_text_precedes_image_and_f5_is_last(tmp_path):
     assert (await executor.return_to_list(target, RT))['returned']
     assert desk.actions[-1] == ('press', 'F5') and desk.selected is None
     assert 'image_submitting' in phases
+    assert desk.actions.count(('open_file',)) == 1
+    assert ('dialog_key', 'Return') not in desk.actions
+
+
+async def test_path_caret_is_removed_before_exact_path_verification(tmp_path):
+    desk = ImageDesktop()
+    desk.path_caret = True  # GTK caret OCR resembles a trailing letter, not a path character.
+    executor, target, phase, _ = await verified_text(desk)
+
+    async def remember(digest):
+        pass
+
+    image = await ImageReplyExecutor(executor, desk.matcher).execute(target, str(make_asset(tmp_path)), RT, phase, remember)
+    assert image.status == 'sent_verified' and image.submitted
     assert desk.actions.count(('open_file',)) == 1
     assert ('dialog_key', 'Return') not in desk.actions
 
