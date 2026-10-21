@@ -32,7 +32,7 @@ from xianyu_monitor.replies.input import InputAdapter, InputError
 from xianyu_monitor.runtime_settings import RuntimeSettings
 from xianyu_monitor.timeutil import utcnow
 from xianyu_monitor.vision.analyzer import FrameAnalyzer, PaneObservation
-from xianyu_monitor.vision.imageops import digest, hamming
+from xianyu_monitor.vision.imageops import hamming
 from xianyu_monitor.vision.pane import canonical_title
 
 log = logging.getLogger(__name__)
@@ -57,6 +57,7 @@ class ReplyOutcome:
     pause_replies: bool = False
     clicked: bool = False
     typed: bool = False
+    submitted: bool = False
     details: dict = field(default_factory=dict)
 
 
@@ -203,13 +204,13 @@ class ReplyExecutor:
         while True:
             if not await set_phase("verifying_send"):
                 return ReplyOutcome("sent_unverified", "lease_lost_during_verification", pause_replies=True,
-                                    clicked=True, typed=True)
+                                    clicked=True, typed=True, submitted=True)
             await self.sleep(min(step, max(0.0, deadline - self.monotonic())))
             sampled_at = self.monotonic()
             pane, status = await self._pane(rt, now)
             if status != "ok" or not self._title_matches(pane, target, rt) or pane.send_failure:
                 return ReplyOutcome("sent_unverified", "send_failure_or_target_changed", pause_replies=True,
-                                    clicked=True, typed=True)
+                                    clicked=True, typed=True, submitted=True)
             newest = pane.last_bubble
             # Keep previously observed send evidence when a new incoming bubble
             # arrives during verification. Still require that outgoing bubble
@@ -232,49 +233,40 @@ class ReplyExecutor:
                 break
         if verified:
             return ReplyOutcome("sent_verified", "outgoing_bubble_matches_no_failure_observed", clicked=True, typed=True,
+                                submitted=True,
                                 details={**last_seen, "bubbles_before": before_count})
         return ReplyOutcome("sent_unverified", "send_not_confirmed_within_timeout", pause_replies=True,
-                            clicked=True, typed=True, details=last_seen)
+                            clicked=True, typed=True, submitted=True, details=last_seen)
 
-    async def park(self, target: ReplyTarget, rt: RuntimeSettings, now=utcnow, before_leave=None) -> dict:
-        """Leave the customer's pane using only a verified, excluded system conversation."""
-        if not self.analyzer.profile.park_system_conversation:
-            return {"parked": False, "reason": "parking_disabled"}
+    async def return_to_list(self, target: ReplyTarget, rt: RuntimeSettings, now=utcnow, before_leave=None) -> dict:
+        """F5 only after submission was verified/recorded by the caller; never click a system row."""
         frame = await self.capture()
         obs = await self.analyzer.analyze(frame, now(), rt, force_full=True)
         if obs.status != "ok":
-            return {"parked": False, "reason": "screen_not_ready"}
+            return {"returned": False, "reason": "screen_not_ready"}
         pane = await self.analyzer.analyze_pane(frame)
         if not self._title_matches(pane, target, rt) or not self._composer_empty(pane):
-            return {"parked": False, "reason": "owner_changed_target_or_draft_present"}
-        system_names = {normalize_name(name) for name in rt.system_conversation_names}
-        rows = [r for r in obs.rows if r.present and r.name_conf >= float(rt.ocr_min_confidence)
-                and normalize_name(r.name) in system_names and normalize_name(r.name) not in target.aliases]
-        # Duplicate system labels aren't a safe target either.
-        names = [normalize_name(r.name) for r in rows]
-        rows = [r for r in rows if names.count(normalize_name(r.name)) == 1]
-        if not rows:
-            return {"parked": False, "reason": "no_verified_system_row_visible"}
-        row = rows[0]
+            return {"returned": False, "reason": "owner_changed_target_or_draft_present"}
         if before_leave is not None:
             obs.pane = pane
             await before_leave(frame, obs)
-        # OCR/SQL took time. Don't click an old row position if a burst reordered
-        # the list or changed the pane while we were deciding where to park.
-        latest = await self.capture()
-        regions = (self.analyzer.profile.conversation_list, self.analyzer.profile.message_pane,
-                   self.analyzer.profile.conversation_title)
-        if latest.size != frame.size or any(
-            digest(latest.crop(region)) != digest(frame.crop(region)) for region in regions if region is not None
-        ):
-            return {"parked": False, "reason": "screen_changed_during_parking"}
         try:
-            await self.input.click(*self.analyzer.profile.row_center(row.index))
-            await self.sleep(float(rt.reply_step_delay_seconds))
-            pane, status = await self._pane(rt, now)
+            await self.input.press("F5")
         except InputError:
-            return {"parked": False, "reason": "parking_input_error", "pause_replies": True}
-        ok = (status == "ok" and pane.title_conf >= float(rt.ocr_min_confidence)
-              and canonical_title(pane.title) == normalize_name(row.name))
-        return {"parked": ok, "reason": "system_conversation_selected" if ok else "parking_target_unverified",
-                "pause_replies": not ok}
+            return {"returned": False, "reason": "refresh_input_error", "pause_replies": True}
+        self.analyzer.reset()
+        deadline = self.monotonic() + float(rt.reply_refresh_timeout_seconds)
+        while True:
+            await self.sleep(max(0.1, float(rt.reply_step_delay_seconds)))
+            frame = await self.capture()
+            obs = await self.analyzer.analyze(frame, now(), rt, force_full=True)
+            if obs.status == "challenge":
+                return {"returned": False, "reason": "refresh_requires_login_or_verification", "pause_replies": True}
+            if obs.status == "ok":
+                pane = await self.analyzer.analyze_pane(frame)
+                if (any(r.present and r.name_conf >= float(rt.ocr_min_confidence) for r in obs.rows)
+                        and not any(r.selected for r in obs.rows) and not canonical_title(pane.title)
+                        and self._composer_empty(pane)):
+                    return {"returned": True, "reason": "refreshed_to_conversation_list"}
+            if self.monotonic() >= deadline:
+                return {"returned": False, "reason": "refresh_return_not_verified", "pause_replies": True}

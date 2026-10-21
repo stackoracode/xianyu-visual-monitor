@@ -68,7 +68,6 @@ class Scene:
 
 def base_profile_dict() -> dict:
     data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
-    data["park_system_conversation"] = True  # fake models a verified in-page system chat
     return data
 
 
@@ -231,6 +230,7 @@ class FakeDesktop:
         self.focused = False
         self.misroute = 0  # clicking row i opens row i+misroute
         self.drop_send = False
+        self.refresh_stuck = False
         self.actions: list[tuple] = []
 
     def scene(self) -> Scene:
@@ -270,6 +270,9 @@ class FakeDesktop:
 
     async def press(self, key: str) -> None:
         self.actions.append(("press", key))
+        if key == "F5" and not self.refresh_stuck:
+            self.selected = None
+            self.focused = False
         if key == "Return" and self.focused and self.composer and self.selected is not None and not self.drop_send:
             name = self.rows[self.selected].name
             self.history.setdefault(name, []).append(SBubble("outgoing", self.composer))

@@ -580,19 +580,22 @@ class MonitorService:
                         if result.jobs or result.intents:
                             self.wake.set()
 
-                    parking = await executor.park(target, rt, before_leave=before_leave)
-                    details["parking"] = parking
+                    returned = (await executor.return_to_list(target, rt, before_leave=before_leave)
+                                if outcome.submitted else {"returned": False, "reason": "not_submitted"})
+                    if outcome.submitted:
+                        await self._handle_frame_locked(await self.capture_backend.capture(), force_full=True)
+                    details["return_to_list"] = returned
                     async with self.db.transaction() as session:
                         row = await session.get(ReplyIntent, intent_id)
                         if row is not None:
                             row.verification = details
                         record = await session.get(Job, job.id)
                         if record is not None:
-                            record.result = {**(record.result or {}), "parking": parking}
-                    if parking.get("pause_replies"):
-                        await self.pause_replies("parking_target_unverified", f"intent {intent_id}")
+                            record.result = {**(record.result or {}), "return_to_list": returned}
+                    if returned.get("pause_replies"):
+                        await self.pause_replies("reply_return_not_verified", f"intent {intent_id}")
                 except Exception:
-                    log.exception("post-reply observation/parking failed for intent %s", intent_id)
+                    log.exception("post-reply observation/refresh failed for intent %s", intent_id)
                     await self.pause_replies("post_reply_observation_failed", f"intent {intent_id}")
                 finally:
                     # Already queued pre-action screenshots are explicitly recorded as superseded.
@@ -601,7 +604,7 @@ class MonitorService:
 
     async def _finish_reply(self, job, intent_id, outcome) -> dict:
         details = {"status": outcome.status, "reason": outcome.reason, "clicked": outcome.clicked,
-                   "typed": outcome.typed, **outcome.details}
+                   "typed": outcome.typed, "submitted": outcome.submitted, **outcome.details}
         async with self.db.session() as session:
             intent = await session.get(ReplyIntent, intent_id)
             if intent is not None and intent.status == "superseded":

@@ -85,7 +85,7 @@ class Profile(BaseModel):
     colors: Colors = Field(default_factory=Colors)
     min_bubble_height: int = 18
     min_bubble_width: int = 24
-    # Some system rows open external support tabs; require controlled opt-in.
+    # Legacy profile field retained for compatibility; system rows are never clicked.
     park_system_conversation: bool = False
 
     @model_validator(mode="after")

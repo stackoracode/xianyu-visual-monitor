@@ -353,6 +353,7 @@
  "setting.reply_max_per_customer_per_day": "每客户每日最多回复数",
  "setting.reply_min_confidence": "回复所需最低检测置信度",
  "setting.reply_mode": "回复模式",
+ "setting.reply_refresh_timeout_seconds": "发送后刷新返回超时（秒）",
  "setting.reply_send_enabled": "启用回复发送",
  "setting.reply_step_delay_seconds": "输入步骤间隔（秒）",
  "setting.reply_text_match_similarity": "气泡文本匹配阈值",

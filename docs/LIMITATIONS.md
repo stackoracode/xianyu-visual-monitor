@@ -19,8 +19,8 @@ the software reports them instead of hiding them.
   the monitor avoids fabricating events. OCR drift and scrolling are also imperfect proxies.
 * **Atomic input versus new arrivals.** The page may receive input after the last screenshot
   check and before a click/Enter. Rechecks, debounce and draft preservation narrow the race
-  but cannot make a screenshot and native input atomic. Without a safe visible system row,
-  parking is skipped and the open-pane detector remains the fallback.
+  but cannot make a screenshot and native input atomic. After submission the worker uses F5 and verifies a return to the list;
+  an owner draft prevents refresh. The open-pane detector remains a fallback.
 * **Off-screen conversations.** Only rows inside the calibrated visible area are examined
   (`coverage` on the Overview page). A conversation below the fold or scrolled away is invisible.
   The monitor does not scroll by itself.

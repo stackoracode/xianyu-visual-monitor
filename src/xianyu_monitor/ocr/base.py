@@ -78,7 +78,8 @@ class RapidOcrEngine:
     def recognize_block(self, image: Image.Image) -> OcrResult:  # pragma: no cover - real OCR
         import numpy as np  # type: ignore[import-not-found]
 
-        result, _ = self._engine(np.asarray(image.convert("RGB")))
+        prepared = imageops.prepare_for_ocr(image, self._scale).convert("RGB")
+        result, _ = self._engine(np.asarray(prepared))
         if not result:
             return OcrResult("", 1.0)
         texts = [str(item[1]) for item in result]
