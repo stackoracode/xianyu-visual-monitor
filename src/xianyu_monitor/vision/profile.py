@@ -90,6 +90,8 @@ class Profile(BaseModel):
     image_attach_click: tuple[int, int] | None = None
     image_dialog_title: Box | None = None
     image_dialog_path: Box | None = None
+    image_dialog_confirm: Box | None = None
+    image_dialog_confirm_click: tuple[int, int] | None = None
     image_dialog_keywords: list[str] = Field(default_factory=lambda: ["Open Files", "打开文件"])
     image_match_threshold: float = Field(default=0.92, ge=0.8, le=1.0)
 
@@ -98,14 +100,19 @@ class Profile(BaseModel):
         width, height = self.frame_width, self.frame_height
         _check_box("conversation_list", self.conversation_list, width, height)
         for name in ("overall_unread_badge", "conversation_title", "message_pane", "composer", "challenge_probe",
-                     "image_dialog_title", "image_dialog_path"):
+                     "image_dialog_title", "image_dialog_path", "image_dialog_confirm"):
             box = getattr(self, name)
             if box is not None:
                 _check_box(name, box, width, height)
-        if self.image_attach_click is not None:
-            x, y = self.image_attach_click
-            if not (0 <= x < width and 0 <= y < height):
-                raise ValueError("image_attach_click is outside the frame")
+        for name in ("image_attach_click", "image_dialog_confirm_click"):
+            point = getattr(self, name)
+            if point is not None and not (0 <= point[0] < width and 0 <= point[1] < height):
+                raise ValueError(f"{name} is outside the frame")
+        if self.image_dialog_confirm_click and self.image_dialog_confirm:
+            x, y = self.image_dialog_confirm_click
+            l, t, r, b = self.image_dialog_confirm
+            if not (l <= x < r and t <= y < b):
+                raise ValueError("image_dialog_confirm_click is outside the confirm button")
         for anchor in self.anchors:
             _check_box(f"anchor:{anchor.name}", anchor.region, width, height)
         for index in range(self.row.count):

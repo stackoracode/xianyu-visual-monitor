@@ -618,6 +618,9 @@ class MonitorService:
                     image = ImageOutcome("uncertain", "image_handler_crashed", pause_replies=True)
                 details["image"] = {"status": image.status, "reason": image.reason,
                                     "submitted": image.submitted, **image.details}
+                log.info("image result for intent %s: %s (%s), selection committed=%s, checks=%s",
+                         intent_id, image.status, image.reason.replace("_", " "), image.submitted,
+                         image.details.get("verification_checks", 0))
                 async with self.db.transaction() as session:
                     row = await session.get(ReplyIntent, intent_id)
                     row.image_status, row.verification = image.status, details
