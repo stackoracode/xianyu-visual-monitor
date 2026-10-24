@@ -325,3 +325,12 @@ async def test_ready_samples_must_be_consecutive_even_after_restart():
     assert r.state['active'] and r.state['ready_samples'] == 1
     await r.tick()
     assert not r.state['active'] and r.state['next_action_at'] == 0
+
+
+async def test_cached_ready_page_while_offline_does_not_resume_replies():
+    r = Rig()
+    r.state = {'active': True, 'ready_samples': 1}
+    r.stage, r.reachable = 3, False
+    await r.tick()
+    assert r.state['active'] and r.state['ready_samples'] == 0
+    assert r.state['phase'] == 'waiting_for_network' and not r.actions

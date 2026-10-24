@@ -72,7 +72,7 @@ class PageMaintenance:
         if frame.size != (self.analyzer.profile.frame_width, self.analyzer.profile.frame_height):
             return bool(state.get("active"))
         kind = await self.kind(frame, rt)
-        if state.get("active") and kind is None and await self.ready(frame, rt):
+        if state.get("active") and kind is None and await self.online() and await self.ready(frame, rt):
             state["ready_samples"] = state.get("ready_samples", 0) + 1
             if state["ready_samples"] >= 2:
                 state.update(active=False, blocked=False, phase="ready", last_refresh_at=now,
