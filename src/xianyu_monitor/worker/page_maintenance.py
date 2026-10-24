@@ -76,12 +76,13 @@ class PageMaintenance:
             state["ready_samples"] = state.get("ready_samples", 0) + 1
             if state["ready_samples"] >= 2:
                 state.update(active=False, blocked=False, phase="ready", last_refresh_at=now,
-                             reconnect=False, refreshed=False, quick=False)
+                             reconnect=False, refreshed=False, quick=False, next_action_at=0)
                 self.analyzer.reset()
             await self.persist(state)
             return True
-        if state.get("active"):
+        if state.get("active") and state.get("ready_samples"):
             state["ready_samples"] = 0
+            await self.persist(state)  # interrupted readiness must also survive a restart
         if state.get("blocked"):
             return True
         if now < state.get("next_action_at", 0):

@@ -308,3 +308,20 @@ async def test_verification_appearing_in_fresh_frame_blocks_click():
     r.analyzer._probe_challenge = probe
     await r.tick()
     assert r.state['phase'] == 'verification_requires_owner' and not r.actions
+
+
+async def test_ready_samples_must_be_consecutive_even_after_restart():
+    r = Rig()
+    r.state = {'active': True, 'blocked': True, 'ready_samples': 0}
+    r.stage = 3
+    await r.tick()
+    assert r.state['ready_samples'] == 1
+    r.foreign = True
+    await r.tick()
+    assert r.saved[-1]['ready_samples'] == 0
+    r.state = copy.deepcopy(r.saved[-1])
+    r.foreign = False
+    await r.tick()
+    assert r.state['active'] and r.state['ready_samples'] == 1
+    await r.tick()
+    assert not r.state['active'] and r.state['next_action_at'] == 0
