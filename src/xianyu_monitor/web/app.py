@@ -753,9 +753,10 @@ def create_app(settings: Settings, db: Database | None = None) -> FastAPI:
         user = await current_user(request)
         async with database.session() as session:
             rt = await load_runtime(session)
+            maintenance = await get_state(session, "page_maintenance")
         specs = [s for s in SPECS if s.key not in GUARDED_SETTINGS]
         return await render(request, "settings.html", user, rt=rt.as_dict(), specs=specs, groups=GROUPS,
-                            static=settings.redacted())
+                            static=settings.redacted(), maintenance=maintenance)
 
     @app.post("/settings")
     async def settings_save(request: Request):

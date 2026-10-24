@@ -68,6 +68,19 @@ class Colors(BaseModel):
     blank_stddev_max: float = 2.0
 
 
+class PageRecoveryCalibration(BaseModel):
+    network_title: Box
+    reconnect_button: Box
+    login_heading: Box
+    quick_button: Box
+    quick_account: Box
+    quick_avatar: Box
+    seller: Box
+    expected_account: str = Field(min_length=1)
+    expected_avatar_hash: str = Field(pattern=r"^[0-9a-f]{16}$")
+    expected_seller: str = Field(min_length=1)
+
+
 class Profile(BaseModel):
     name: str = "default"
     frame_width: int
@@ -94,10 +107,15 @@ class Profile(BaseModel):
     image_dialog_confirm_click: tuple[int, int] | None = None
     image_dialog_keywords: list[str] = Field(default_factory=lambda: ["Open Files", "打开文件"])
     image_match_threshold: float = Field(default=0.92, ge=0.8, le=1.0)
+    page_recovery: PageRecoveryCalibration | None = None
 
     @model_validator(mode="after")
     def _geometry(self) -> Profile:
         width, height = self.frame_width, self.frame_height
+        if self.page_recovery is not None:
+            for name in ("network_title", "reconnect_button", "login_heading", "quick_button",
+                         "quick_account", "quick_avatar", "seller"):
+                _check_box(f"page_recovery.{name}", getattr(self.page_recovery, name), width, height)
         _check_box("conversation_list", self.conversation_list, width, height)
         for name in ("overall_unread_badge", "conversation_title", "message_pane", "composer", "challenge_probe",
                      "image_dialog_title", "image_dialog_path", "image_dialog_confirm"):

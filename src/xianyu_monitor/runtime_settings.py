@@ -30,7 +30,7 @@ class SettingSpec:
 DEFAULT_SYSTEM_NAMES = ["闲小蜜", "闲鱼小助手", "闲鱼助手", "系统通知", "官方通知", "闲鱼官方"]
 DEFAULT_CHALLENGE_KEYWORDS = [
     "安全验证", "请完成验证", "拖动滑块", "滑块验证", "验证码", "扫码登录", "请登录", "登录已过期",
-    "账号异常", "captcha", "verify you are human",
+    "账号异常", "手机扫码安全登录", "captcha", "verify you are human",
 ]
 DEFAULT_SENSITIVE_TERMS = [
     "价格", "多少钱", "便宜", "优惠", "包邮", "砍价", "最低", "退款", "退货", "退钱", "赔", "投诉",
@@ -65,6 +65,13 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("email_language", "choice", "en", "notifications", choices=("en", "zh")),
     SettingSpec("email_max_attempts", "int", 5, "notifications", 1, 20),
     SettingSpec("email_retry_base_seconds", "int", 60, "notifications", 5, 86400),
+    SettingSpec("email_network_wait_hours", "int", 0, "notifications", 0, 168),
+    # Explicit opt-in desktop maintenance. Cached-account login also needs calibration.
+    SettingSpec("page_recovery_enabled", "bool", False, "page"),
+    SettingSpec("page_quick_enter_enabled", "bool", False, "page"),
+    SettingSpec("page_refresh_enabled", "bool", False, "page"),
+    SettingSpec("page_refresh_interval_minutes", "int", 30, "page", 5, 1440),
+    SettingSpec("page_recovery_wait_seconds", "int", 15, "page", 5, 120),
     # Replies
     SettingSpec("reply_mode", "choice", "off", "replies", choices=("off", "review", "auto")),
     SettingSpec("reply_send_enabled", "bool", False, "replies"),
@@ -94,7 +101,7 @@ SPECS: tuple[SettingSpec, ...] = (
 )
 
 SPEC_BY_KEY = {spec.key: spec for spec in SPECS}
-GROUPS = ("monitoring", "notifications", "replies", "retention")
+GROUPS = ("monitoring", "notifications", "replies", "page", "retention")
 
 
 class SettingError(ValueError):

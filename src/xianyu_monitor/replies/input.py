@@ -60,6 +60,25 @@ class XdotoolInput:
         # already at this position. X requests stay ordered without that wait.
         await self._run("xdotool", "mousemove", str(int(x)), str(int(y)), "click", "1")
 
+    async def is_browser_active(self) -> bool:
+        """Read X11 window ownership before maintenance input; never focus another window."""
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec("xdotool", "getactivewindow", env=self.env,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            out, _ = await asyncio.wait_for(proc.communicate(), self.timeout)
+            if proc.returncode or not out.strip():
+                return False
+            proc = await asyncio.create_subprocess_exec("xprop", "-id", out.decode().strip(), "WM_CLASS",
+                env=self.env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            out, _ = await asyncio.wait_for(proc.communicate(), self.timeout)
+            return proc.returncode == 0 and any(name in out.lower() for name in (b"google-chrome", b"chromium"))
+        except (OSError, asyncio.TimeoutError):
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            return False
+
     async def type_text(self, text: str) -> None:
         if self.text_method == "clipboard":
             # xclip forks a selection owner that serves the paste; it exits on next selection.
