@@ -34,6 +34,10 @@ class SmtpTransientError(RuntimeError):
     """The message was definitely not accepted; safe to retry later."""
 
 
+class SmtpNetworkError(SmtpTransientError):
+    """Connection failed before submission; optional offline waiting is safe."""
+
+
 class SmtpPermanentError(RuntimeError):
     """The server rejected the message permanently."""
 
@@ -92,7 +96,9 @@ class SmtpSender:
             raise SmtpConfigError("SMTP server does not support the configured security mode") from exc
         except ssl.SSLCertVerificationError as exc:
             raise SmtpConfigError("SMTP TLS certificate verification failed") from exc
-        except (smtplib.SMTPException, OSError) as exc:
+        except (OSError, smtplib.SMTPServerDisconnected) as exc:
+            raise SmtpNetworkError(f"SMTP connect failed: {type(exc).__name__}") from exc
+        except smtplib.SMTPException as exc:
             raise SmtpTransientError(f"SMTP connect failed: {type(exc).__name__}") from exc
 
     def submit(self, conn: smtplib.SMTP, message: EmailMessage) -> dict:
@@ -222,6 +228,11 @@ class EmailJobHandler:
         except SmtpConfigError as exc:
             await queue.fail(job, str(exc), retryable=False)
             return "failed"
+        except SmtpNetworkError as exc:
+            if rt.email_network_wait_hours:
+                return await queue.wait_for_network(job, str(exc), rt.email_network_wait_hours,
+                                                    rt.email_retry_base_seconds)
+            return await queue.fail(job, str(exc), retryable=True, backoff_seconds=rt.email_retry_base_seconds)
         except SmtpTransientError as exc:
             return await queue.fail(job, str(exc), retryable=True, backoff_seconds=rt.email_retry_base_seconds)
         try:

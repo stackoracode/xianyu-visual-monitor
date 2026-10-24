@@ -1,3 +1,4 @@
+import datetime as dt
 import smtplib
 
 from sqlalchemy import delete, select
@@ -6,6 +7,7 @@ from xianyu_monitor.models import Job, JobAttempt
 from xianyu_monitor.notify.emailer import EmailJobHandler, SmtpConfig, build_message, render_new_customer
 from xianyu_monitor.queueing.jobs import JobQueue, enqueue
 from xianyu_monitor.runtime_settings import RuntimeSettings
+from xianyu_monitor.timeutil import utcnow
 
 
 class FakeSMTP:
@@ -152,3 +154,47 @@ def test_message_id_is_deterministic_per_notification():
 def test_chinese_email_rendering_preserves_source_text():
     subject, body = render_new_customer(PAYLOAD, "zh")
     assert "新客户" in subject and "买家_甲" in subject and "还在吗？" in body
+
+
+async def test_offline_window_preserves_attempt_budget_then_sends_once(db, settings):
+    rt = RuntimeSettings({'dry_run': False, 'email_network_wait_hours': 24})
+    outcome, row = await run_job(db, settings, 'refused', rt)
+    queue = JobQueue(db, 'network-test')
+    assert outcome == 'pending' and row.phase == 'network_wait' and row.attempts == 0
+    for _ in range(5):
+        async with db.transaction() as s:
+            current = await s.get(Job, row.id)
+            current.available_at = utcnow() - dt.timedelta(seconds=1)
+        (job,) = await queue.claim(['email'])
+        assert await EmailJobHandler(settings, factory('refused')).handle(job, queue, rt) == 'pending'
+    async with db.transaction() as s:
+        current = await s.get(Job, row.id)
+        current.available_at = utcnow() - dt.timedelta(seconds=1)
+    (job,) = await queue.claim(['email'])
+    FakeSMTP.instances.clear()
+    assert await EmailJobHandler(settings, factory('ok')).handle(job, queue, rt) == 'succeeded'
+    assert len(FakeSMTP.instances[-1].sent) == 1
+    assert await queue.claim(['email']) == []
+    async with db.session() as s:
+        attempts = (await s.execute(select(JobAttempt))).scalars().all()
+        assert len(attempts) == 7 and sum(a.phase == 'network_wait' for a in attempts) == 6
+
+
+async def test_offline_window_deadline_survives_restart(db, settings):
+    rt = RuntimeSettings({'dry_run': False, 'email_network_wait_hours': 1})
+    _, row = await run_job(db, settings, 'refused', rt)
+    async with db.transaction() as s:
+        current = await s.get(Job, row.id)
+        current.created_at = utcnow() - dt.timedelta(hours=2)
+        current.available_at = utcnow() - dt.timedelta(seconds=1)
+    queue = JobQueue(db, 'restarted')
+    (job,) = await queue.claim()
+    assert await EmailJobHandler(settings, factory('refused')).handle(job, queue, rt) == 'failed'
+    assert await queue.claim() == []
+
+
+async def test_offline_window_does_not_retry_uncertain_submission(db, settings):
+    rt = RuntimeSettings({'dry_run': False, 'email_network_wait_hours': 24})
+    outcome, row = await run_job(db, settings, 'timeout', rt)
+    assert outcome == 'uncertain' and row.status == 'uncertain'
+    assert await JobQueue(db, 'restarted').claim() == []

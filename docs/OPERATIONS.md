@@ -11,6 +11,7 @@
 | `challenge` | Login/verification keywords visible | no | paused immediately; alert email |
 | `capture_failed` | Screenshot command failed (display gone, permissions) | no | paused after N failures |
 | `not_calibrated` | No valid active calibration profile | no | - |
+| `page_recovery` | Known recovery screen; bounded input or owner attention | no customer events | recovery pause |
 | `paused` | Monitoring paused by an admin | no | - |
 
 The worker heartbeat is shown on the Overview page. If it is older than 60 s, the UI shows a
@@ -25,8 +26,9 @@ banner: the absence of alerts then means nothing. `/healthz` returns `{"web": "o
   the reply pause with a reason and send one alert email per episode. Only the owner can
   resume replies, after checking the screen. Resuming does not clear a verification prompt
   that is still visible.
-* The monitor never interacts with login or verification pages. Solve them yourself on the
-  desktop or phone.
+* Login and verification pages require the owner, except the explicitly enabled, identity-checked
+  saved-account quick entry described in [Network recovery](NETWORK_RECOVERY.md).
+* Optional network recovery and idle-list F5 settings are described in [Network recovery](NETWORK_RECOVERY.md).
 
 ## Bursts and the selected conversation
 

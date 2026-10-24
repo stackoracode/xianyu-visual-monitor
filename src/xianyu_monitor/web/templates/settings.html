@@ -3,6 +3,9 @@
 {% block content %}
 <h1>{{ t('nav.settings') }}</h1>
 <p class="hint">{{ t('settings.intro') }}</p>
+<p class="hint">{{ t('settings.page_hint') }}</p>
+{% if maintenance %}<section class="card"><h2>{{ t('settings.page_status') }}</h2>
+<pre class="code">{{ maintenance|tojson_pretty }}</pre></section>{% endif %}
 <form method="post" action="/settings">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   {% for g in groups %}

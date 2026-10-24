@@ -152,6 +152,27 @@ class JobQueue:
             {"outcome": "failed", "error": error[:2000], "finished_at": now})
         return "failed"
 
+    async def wait_for_network(self, job: ClaimedJob, error: str, hours: int, delay: float) -> str:
+        """Only pre-submission connection errors may wait without spending delivery attempts.
+
+        The deadline is based on durable creation time, so restarts cannot extend it.
+        Every connection attempt remains in job_attempts even when the budget is refunded.
+        """
+        now = utcnow()
+        async with self.db.session() as session:
+            row = await session.get(Job, job.id)
+            expired = row is None or now >= row.created_at + dt.timedelta(hours=hours)
+        if expired:
+            await self.fail(job, error, retryable=False)
+            return "failed"
+        await self._owned_update(
+            job, {"status": "pending", "phase": "network_wait", "last_error": error[:2000],
+                  "attempts": max(0, job.attempts - 1),
+                  "available_at": now + dt.timedelta(seconds=min(900, max(30, delay))),
+                  "lease_owner": None, "lease_expires_at": None},
+            {"outcome": "retry", "phase": "network_wait", "error": error[:2000], "finished_at": now})
+        return "pending"
+
     async def mark_uncertain(self, job: ClaimedJob, error: str, result: dict | None = None) -> bool:
         now = utcnow()
         return await self._owned_update(

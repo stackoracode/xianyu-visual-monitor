@@ -371,9 +371,90 @@ class MonitorService:
 
     async def handle_frame(self, frame: CapturedFrame) -> FrameObservation | None:
         async with self.desktop_lock:
+            if await self._maintain_page(frame):
+                return None
             obs = await self._handle_frame_locked(frame)
             await self._return_idle_to_list(obs)
+            await self._maintain_page(frame, periodic=True)
             return obs
+
+    async def _maintain_page(self, frame: CapturedFrame, periodic: bool = False) -> bool:
+        from xianyu_monitor.worker.page_maintenance import PageMaintenance
+        rt = await self.runtime()
+        if (rt.dry_run or rt.monitor_mode != "active" or self.input_factory is None
+                or not (rt.page_recovery_enabled or rt.page_refresh_enabled)
+                or await self._monitor_paused()):
+            return False
+        if not periodic and self.frame_watermark is not None and frame.captured_at <= self.frame_watermark:
+            return False
+        await self.refresh_profile()
+        if self.analyzer is None or self.analyzer.profile.page_recovery is None:
+            return False
+        async with self.db.session() as session:
+            state = await get_state(session, "page_maintenance")
+            pause = await get_state(session, state_keys.REPLY_PAUSE)
+            if pause.get("paused") and (pause.get("reason") != "page_recovery" or pause.get("by") != "worker"):
+                return False  # never clear manual, challenge, draft or uncertain-send pauses
+            busy = (await session.execute(select(Job.id).where(
+                Job.kind == "reply", Job.status.in_(["pending", "leased"])).limit(1))).scalar_one_or_none()
+            if busy is not None:
+                return bool(state.get("active"))
+
+        last_phase = state.get("phase")
+
+        async def persist(data):
+            nonlocal last_phase
+            if data.get("phase") != last_phase:
+                log.info("page maintenance: %s (active=%s, blocked=%s)", data.get("phase"),
+                         bool(data.get("active")), bool(data.get("blocked")))
+                last_phase = data.get("phase")
+            async with self.db.transaction() as session:
+                await set_state(session, "page_maintenance", data)
+                current = await get_state(session, state_keys.REPLY_PAUSE)
+                if data.get("active") and not current.get("paused"):
+                    await set_state(session, state_keys.REPLY_PAUSE,
+                                    {"paused": True, "reason": "page_recovery", "by": "worker", "at": iso(utcnow())})
+                elif (not data.get("active") and current.get("reason") == "page_recovery"
+                      and current.get("by") == "worker"):
+                    await set_state(session, state_keys.REPLY_PAUSE,
+                                    {"paused": False, "reason": None, "by": "worker", "at": iso(utcnow())})
+
+        async def online():
+            async def check(host, port):
+                try:
+                    _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), 5)
+                    writer.close()
+                    return True
+                except (OSError, asyncio.TimeoutError):
+                    return False
+            # SMTP reachability is independent of the browser recovery path.
+            return await check("www.goofish.com", 443)
+
+        async def capture():
+            return (await self.capture_backend.capture()).image
+
+        async def guard():
+            current_rt = await self.runtime(max_age=0)
+            if (current_rt.dry_run or current_rt.monitor_mode != "active" or await self._monitor_paused()
+                    or (rt.page_recovery_enabled and not current_rt.page_recovery_enabled)
+                    or (rt.page_refresh_enabled and not current_rt.page_refresh_enabled)
+                    or (rt.page_quick_enter_enabled and not current_rt.page_quick_enter_enabled)):
+                return False
+            async with self.db.session() as session:
+                current = await get_state(session, state_keys.REPLY_PAUSE)
+                return not current.get("paused") or (current.get("reason") == "page_recovery"
+                                                     and current.get("by") == "worker")
+
+        maintenance = PageMaintenance(self.analyzer, capture, self.input_factory(), online, persist, guard=guard)
+        handled = await maintenance.tick(rt, state, periodic=periodic)
+        if handled:
+            self.last_frame_at = utcnow()
+            self.last_status = "page_recovery" if state.get("active") else "ok"
+            self.frame_watermark = utcnow()
+            self._save_latest(await capture())
+            if state.get("active"):
+                await self._set_health("page_recovery", phase=state.get("phase"))
+        return handled
 
     async def _return_idle_to_list(self, obs: FrameObservation | None) -> None:
         """Called only by monitoring, under the desktop lock, never mid-send."""
